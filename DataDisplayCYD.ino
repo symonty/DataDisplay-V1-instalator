@@ -1,3 +1,6 @@
+//update funguje - prověřit, opravit vykreslovani a blikani progress baru
+
+
 // oprava nacteni lokace po vybrani mista ze seznamu
 //pridana volbe jednotky kmh/mph a jeji ukladani do pressetu do menu weather
 // Invert pridano a ukladano 9.3.
@@ -16,6 +19,8 @@
 #include <XPT2046_Touchscreen.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Update.h>
+#include <esp_ota_ops.h>
 
 // ================= GLOBÁLNÍ NASTAVENÍ (Musí být PRVNÍ) =================
 TFT_eSPI tft = TFT_eSPI();
@@ -25,7 +30,23 @@ bool isWhiteTheme = false;  // TEĎ JE TO TADY, TAKŽE TO VŠICHNI VIDÍ
 bool isDigitalClock = false; // false = Analog, true = Digital
 bool is12hFormat = false;    // false = 24h, true = 12h
 bool invertColors = false;  // NOVÁ PROMĚNNÁ: Invertování barev pro CYD desky s invertovaným displejem
-// ============================================================
+
+// ================= OTA UPDATE GLOBALS =================
+const char* FIRMWARE_VERSION = "1.2.1";  // AKTUÁLNÍ VERZE
+const char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/lachimalaif/DataDisplay-V1-instalator/main/version.json";
+const char* FIRMWARE_URL = "https://github.com/lachimalaif/DataDisplay-V1-instalator/releases/latest/download/DataDisplayCYD.ino.bin";
+
+String availableVersion = "";  // Dostupná verze z GitHubu
+String downloadURL = "";       // URL pro stažení firmware (z version.json)
+bool updateAvailable = false;  // Je k dispozici aktualizace?
+int otaInstallMode = 1;  // 0=Auto, 1=By user, 2=Manual
+unsigned long lastVersionCheck = 0;
+const unsigned long VERSION_CHECK_INTERVAL = 86400000;  // 24 hodin (pro testování změň na 30000 = 30s)
+
+bool isUpdating = false;  // Probíhá aktualizace?
+int updateProgress = 0;   // Progress 0-100%
+String updateStatus = ""; // Status zpráva
+
 // ================= TEMA NASTAVENI =================
 int themeMode = 0; // 0 = BLACK, 1 = WHITE, 2 = BLUE, 3 = YELLOW
 // POZN: U tématech BLACK a WHITE určuje isWhiteTheme: false=BLACK, true=WHITE
@@ -509,7 +530,7 @@ int lastWifiStatus = -1;
 bool forceClockRedraw = false;
 
 enum ScreenState {
-  CLOCK, SETTINGS, WIFICONFIG, KEYBOARD, WEATHERCONFIG, REGIONALCONFIG, GRAPHICSCONFIG, COUNTRYSELECT, CITYSELECT, LOCATIONCONFIRM, CUSTOMCITYINPUT, CUSTOMCOUNTRYINPUT, COUNTRYLOOKUPCONFIRM, CITYLOOKUPCONFIRM
+  CLOCK, SETTINGS, WIFICONFIG, KEYBOARD, WEATHERCONFIG, REGIONALCONFIG, GRAPHICSCONFIG, FIRMWARE_SETTINGS, COUNTRYSELECT, CITYSELECT, LOCATIONCONFIRM, CUSTOMCITYINPUT, CUSTOMCOUNTRYINPUT, COUNTRYLOOKUPCONFIRM, CITYLOOKUPCONFIRM
 };
 ScreenState currentState = CLOCK;
 
@@ -760,6 +781,19 @@ void drawWifiIndicator() {
   int wifiStatus = WiFi.status();
   uint16_t color = wifiStatus == WL_CONNECTED ? TFT_GREEN : TFT_RED;
   tft.fillCircle(300, 20, 6, color);
+}
+
+// Ikona dostupné aktualizace (zelená šipka vedle WiFi)
+void drawUpdateIndicator() {
+  if (!updateAvailable) return;
+  
+  int iconX = 310;  // Vedle WiFi ikony
+  int iconY = 12;
+  
+  // Zelená šipka dolů (download symbol)
+  tft.fillTriangle(iconX, iconY + 8, iconX + 4, iconY, iconX + 8, iconY + 8, TFT_GREEN);
+  tft.fillRect(iconX + 2, iconY + 8, 4, 6, TFT_GREEN);
+  tft.fillRect(iconX, iconY + 14, 8, 2, TFT_GREEN);
 }
 
 void loadRecentCities() {
@@ -1133,7 +1167,6 @@ void showWifiConnectingScreen(String ssid);
 void showWifiResultScreen(bool success);
 void handleNamedayUpdate();
 
-bool fetchNameday();
 
 int getMenuItemY(int itemIndex) {
   return MENU_BASE_Y + itemIndex * MENU_ITEM_SPACING;
@@ -1310,11 +1343,14 @@ void drawSettingsScreen()
   tft.setTextDatum(MC_DATUM);
   tft.drawString("SETTINGS", 160, 30, 4);
 
-  String menuItems[] = {"WiFi Setup", "Weather", "Regional", "Graphics"};
-  uint16_t colors[] = {TFT_BLUE, TFT_BLUE, TFT_BLUE, TFT_BLUE};
+  String menuItems[] = {"WiFi Setup", "Weather", "Regional", "Graphics", "Firmware"};  // PŘIDÁNO Firmware
+  uint16_t colors[] = {TFT_BLUE, TFT_BLUE, TFT_BLUE, TFT_BLUE, TFT_BLUE};  // Přidána 5. barva
 
-  for (int i = 0; i < 4; i++) {
-    if (i >= menuOffset && i < menuOffset + 4) {
+  int totalItems = 5;  // ZMĚNĚNO z 4 na 5
+  int visibleItems = 4;  // Kolik se vejde na obrazovku najednou
+
+  for (int i = 0; i < totalItems; i++) {
+    if (i >= menuOffset && i < menuOffset + visibleItems) {
       int yPos = getMenuItemY(i - menuOffset);
       tft.drawRoundRect(40, yPos, 180, MENU_ITEM_HEIGHT, 6, colors[i]);
       tft.drawRoundRect(39, yPos-1, 182, MENU_ITEM_HEIGHT+2, 6, colors[i]);  // Silný rámeček!
@@ -1323,15 +1359,18 @@ void drawSettingsScreen()
     }
   }
 
+  // Šipka nahoru (pokud nejsme na začátku)
   if (menuOffset > 0) {
     tft.drawRoundRect(230, 70, 50, 50, 4, TFT_BLUE);
     drawArrowUp(230, 70, TFT_BLUE);
   }
 
+  // Tlačítko ZPĚT
   tft.drawRoundRect(230, 125, 50, 50, 4, TFT_RED);
   drawArrowBack(230, 125, TFT_RED);
 
-  if (menuOffset < (4 - 4)) {
+  // Šipka dolů (pokud je více než 4 položky)
+  if (menuOffset < (totalItems - visibleItems)) {
     tft.drawRoundRect(230, 180, 50, 50, 4, TFT_BLUE);
     drawArrowDown(230, 180, TFT_BLUE);
   }
@@ -1740,6 +1779,90 @@ void drawCustomCountryInput() {
   
   tft.setTextColor(isWhiteTheme ? TFT_BLACK : TFT_WHITE); // Reset barvy
 }
+
+// ================= FIRMWARE SETTINGS SCREEN =================
+
+void drawFirmwareScreen() {
+  tft.fillScreen(getBgColor());
+  
+  if (themeMode == 2) fillGradientVertical(0, 0, 320, 240, blueDark, blueLight);
+  else if (themeMode == 3) fillGradientVertical(0, 0, 320, 240, yellowDark, yellowLight);
+  
+  // Nadpis
+  tft.setTextColor(getTextColor());
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("FIRMWARE", 160, 30, 4);
+  
+  // Nastavíme datum pro levý sloupec
+  tft.setTextDatum(ML_DATUM);
+  
+  int yPos = 60;
+  
+  // Current version
+  tft.setTextColor(getTextColor());
+  tft.drawString("Current version:", 10, yPos, 2);
+  tft.setTextColor(TFT_GREEN);
+  tft.drawString(String(FIRMWARE_VERSION), 160, yPos, 2);
+  
+  yPos += 25;
+  
+  // Available version
+  tft.setTextColor(getTextColor());
+  tft.drawString("Available:", 10, yPos, 2);
+  if (availableVersion == "" || !updateAvailable) {
+    tft.setTextColor(TFT_DARKGREY);
+    tft.drawString("-", 160, yPos, 2);
+  } else {
+    tft.setTextColor(TFT_ORANGE);
+    tft.drawString(availableVersion, 160, yPos, 2);
+  }
+  
+  yPos += 35;
+  
+  // Install mode nadpis
+  tft.setTextColor(getTextColor());
+  tft.drawString("Install mode:", 10, yPos, 2);
+  
+  yPos += 25;  // yPos je nyní 145
+  
+  // Radio buttons pro režim instalace (JEN Auto a By user)
+  const char* modes[2] = {"Auto", "By user"};
+  for (int i = 0; i < 2; i++) {
+    int btnY = yPos + (i * 25);  // 145, 170
+    
+    // Radio button - kruh má střed na btnY
+    tft.drawCircle(20, btnY, 6, getTextColor());
+    if (otaInstallMode == i) {
+      tft.fillCircle(20, btnY, 4, TFT_GREEN);
+    }
+    
+    // Text - SPRÁVNĚ zarovnán s kruhem
+    // ML_DATUM = Middle Left, takže y je vertikální střed textu
+    // Kruh má střed na btnY, text má taky střed na btnY
+    tft.setTextColor(getTextColor());
+    tft.drawString(modes[i], 35, btnY, 2);
+  }
+  
+  // Reset text datum na centrování pro tlačítka
+  tft.setTextDatum(MC_DATUM);
+  
+  // Tlačítko Check Now / Install
+  int btnY = 190;
+  if (updateAvailable) {
+    tft.fillRoundRect(10, btnY, 140, 30, 5, TFT_GREEN);
+    tft.setTextColor(TFT_BLACK);
+    tft.drawString("INSTALL", 80, btnY + 15, 2);
+  } else {
+    tft.fillRoundRect(10, btnY, 140, 30, 5, TFT_BLUE);
+    tft.setTextColor(TFT_WHITE);
+    tft.drawString("CHECK NOW", 80, btnY + 15, 2);
+  }
+  
+  // Tlačítko ZPĚT (stejný styl jako ostatní menu)
+  tft.drawRoundRect(230, 125, 50, 50, 4, TFT_RED);
+  drawArrowBack(230, 125, TFT_RED);
+}
+
 
 void drawGraphicsScreen() {
   tft.fillScreen(getBgColor());
@@ -2322,6 +2445,8 @@ void applyLocation() {
   
   lastDay = -1; // Vynutí update data
   lastWeatherUpdate = 0; // Vynutí update počasí
+  lastNamedayDay = -1; // OPRAVA: Vynutí update svátku při změně lokace
+  handleNamedayUpdate(); // OPRAVA: Aktualizace svátku ihned po změně lokace
 }
 
 void loadSavedLocation() {
@@ -2350,140 +2475,7 @@ void loadSavedLocation() {
   }
 }
 
-bool fetchNameday() {
-  Serial.print("[NAMEDAY] fetchNameday called - selectedCountry: ");
-  Serial.println(selectedCountry);
 
-  if (selectedCountry != "Czech Republic") {
-    Serial.print("[NAMEDAY] Namedays supported only for Czech Republic, current: ");
-    Serial.println(selectedCountry);
-    namedayValid = false;
-    todayNameday = "--";
-    tft.setFreeFont(NULL);  // Reset na defaultní font
-    return false;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[NAMEDAY] WiFi not connected");
-    namedayValid = false;
-    tft.setFreeFont(NULL);  // Reset na defaultní font
-    return false;
-  }
-
-  time_t now = time(nullptr);
-  struct tm *timeinfo = localtime(&now);
-
-  if (!timeinfo) {
-    Serial.println("[NAMEDAY] Failed to get local time");
-    namedayValid = false;
-    tft.setFreeFont(NULL);  // Reset na defaultní font
-    return false;
-  }
-
-  int day = timeinfo->tm_mday;
-  int month = timeinfo->tm_mon + 1;
-
-  String dayStr = (day < 10) ? "0" + String(day) : String(day);
-  String monthStr = (month < 10) ? "0" + String(month) : String(month);
-  String dateParam = dayStr + monthStr;
-
-  Serial.print("[NAMEDAY] Date: ");
-  Serial.println(dateParam);
-
-  HTTPClient http;
-  http.setTimeout(8000);
-
-  String url = "https://svatky.adresa.info/json?date=" + dateParam;
-
-  Serial.print("[NAMEDAY] Fetching ");
-  Serial.println(url);
-
-  http.begin(url);
-  http.setUserAgent("ESP32");
-
-  int httpCode = http.GET();
-
-  Serial.print("[NAMEDAY] HTTP Code: ");
-  Serial.println(httpCode);
-
-  if (httpCode != 200) {
-    Serial.print("[NAMEDAY] HTTP Error ");
-    Serial.println(httpCode);
-    http.end();
-    namedayValid = false;
-    tft.setFreeFont(NULL);  // Reset na defaultní font
-    return false;
-  }
-
-  String payload = http.getString();
-
-  Serial.print("[NAMEDAY] Response length: ");
-  Serial.println(payload.length());
-
-  if (payload.length() == 0 || payload.length() > 1000) {
-    Serial.print("[NAMEDAY] Response: ");
-    Serial.println(payload);
-  }
-
-  // FIXED v16.6: Remove diacritics on complete API response IMMEDIATELY after fetch
-  payload = removeDiacritics(payload);
-  Serial.print("[NAMEDAY] After diacritics removal: ");
-  Serial.println(payload);
-
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, payload);
-
-  if (error) {
-    Serial.print("[NAMEDAY] JSON Error ");
-    Serial.println(error.c_str());
-    namedayValid = false;
-    http.end();
-    tft.setFreeFont(NULL);  // Reset na defaultní font
-    return false;
-  }
-
-  if (doc.is<JsonArray>()) {
-    JsonArray arr = doc.as<JsonArray>();
-
-    if (arr.size() > 0) {
-      JsonObject entry = arr[0];
-
-      if (entry["name"].is<const char*>()) {
-        String name = entry["name"].as<String>();
-
-        int slashPos = name.indexOf('/');
-        if (slashPos > 0) {
-          todayNameday = name.substring(0, slashPos);
-        } else {
-          todayNameday = name;
-        }
-
-        namedayValid = true;
-
-        Serial.print("[NAMEDAY] SUCCESS: ");
-        Serial.println(todayNameday);
-
-        forceClockRedraw = true;
-        http.end();
-        tft.setFreeFont(NULL);  // Reset na defaultní font
-        return true;
-      }
-    }
-
-    Serial.println("[NAMEDAY] Could not parse nameday from response");
-    namedayValid = false;
-    http.end();
-    tft.setFreeFont(NULL);  // Reset na defaultní font
-    return false;
-  }
-
-  Serial.println("[NAMEDAY] Response is not array or empty");
-  namedayValid = false;
-  http.end();
-  tft.setFreeFont(NULL);  // Reset na defaultní font
-  return false;
-  
-}
 
 // ================= WEATHER FUNCTIONS =================
 String getWeatherDesc(int code) {
@@ -2925,6 +2917,322 @@ void drawSunsetIcon(int x, int y, uint16_t color) {
   tft.drawLine(x + 11, y + 9, x + 13, y + 7, color);   // pravý horní
 }
 
+// ================= OTA UPDATE FUNCTIONS =================
+
+// Porovnání verzí (vrací true pokud newVer > currentVer)
+bool isNewerVersion(String currentVer, String newVer) {
+  // Odstraníme "v" prefix pokud existuje
+  currentVer.replace("v", "");
+  newVer.replace("v", "");
+  
+  int currMajor = 0, currMinor = 0, currPatch = 0;
+  int newMajor = 0, newMinor = 0, newPatch = 0;
+  
+  // Parse current version (podporuje formát X.Y.Z)
+  int firstDot = currentVer.indexOf('.');
+  if (firstDot > 0) {
+    currMajor = currentVer.substring(0, firstDot).toInt();
+    int secondDot = currentVer.indexOf('.', firstDot + 1);
+    if (secondDot > 0) {
+      currMinor = currentVer.substring(firstDot + 1, secondDot).toInt();
+      currPatch = currentVer.substring(secondDot + 1).toInt();
+    } else {
+      currMinor = currentVer.substring(firstDot + 1).toInt();
+    }
+  }
+  
+  // Parse new version (podporuje formát X.Y.Z)
+  firstDot = newVer.indexOf('.');
+  if (firstDot > 0) {
+    newMajor = newVer.substring(0, firstDot).toInt();
+    int secondDot = newVer.indexOf('.', firstDot + 1);
+    if (secondDot > 0) {
+      newMinor = newVer.substring(firstDot + 1, secondDot).toInt();
+      newPatch = newVer.substring(secondDot + 1).toInt();
+    } else {
+      newMinor = newVer.substring(firstDot + 1).toInt();
+    }
+  }
+  
+  Serial.print("[OTA] Comparing versions: ");
+  Serial.print(currMajor); Serial.print("."); Serial.print(currMinor); Serial.print("."); Serial.print(currPatch);
+  Serial.print(" vs ");
+  Serial.print(newMajor); Serial.print("."); Serial.print(newMinor); Serial.print("."); Serial.println(newPatch);
+  
+  // Porovnání verzí
+  if (newMajor > currMajor) return true;
+  if (newMajor == currMajor && newMinor > currMinor) return true;
+  if (newMajor == currMajor && newMinor == currMinor && newPatch > currPatch) return true;
+  return false;
+}
+
+// Kontrola dostupné verze na GitHubu
+void checkForUpdate() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[OTA] WiFi not connected");
+    return;
+  }
+  
+  Serial.println("[OTA] Checking for updates...");
+  HTTPClient http;
+  
+  // OPRAVA: Povolit redirecty i pro kontrolu verze (pro jistotu)
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  
+  http.begin(VERSION_CHECK_URL);
+  http.setTimeout(10000);
+  // 10s timeout
+  
+  int httpCode = http.GET();
+  
+  if (httpCode == 200) {
+    String payload = http.getString();
+    Serial.println("[OTA] Response: " + payload);
+    
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (!error) {
+      availableVersion = doc["version"].as<String>();
+      downloadURL = doc["download_url"].as<String>();  // NOVÉ: Načtení download URL
+      
+      Serial.print("[OTA] Current: ");
+      Serial.print(FIRMWARE_VERSION);
+      Serial.print(" | Available: ");
+      Serial.println(availableVersion);
+      
+      updateAvailable = isNewerVersion(String(FIRMWARE_VERSION), availableVersion);
+      
+      if (updateAvailable) {
+        Serial.println("[OTA] ✓ New version available!");
+        Serial.println("[OTA] Download URL: " + downloadURL);
+      } else {
+        Serial.println("[OTA] Already up to date");
+      }
+    } else {
+      Serial.println("[OTA] JSON parse error");
+    }
+  } else {
+    Serial.print("[OTA] HTTP error: ");
+    Serial.println(httpCode);
+  }
+  
+  http.end();
+  lastVersionCheck = millis();
+}
+
+// Stažení a instalace firmware
+void performOTAUpdate() {
+  if (!updateAvailable) {
+    Serial.println("[OTA] No update available");
+    return;
+  }
+  
+  isUpdating = true;
+  updateProgress = 0;
+  updateStatus = "Connecting...";
+  
+  // Zobrazíme progress screen
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("FIRMWARE UPDATE", 160, 30, 2);
+  
+  // Kontrola, zda máme download URL
+  if (downloadURL == "") {
+    Serial.println("[OTA] ✗ No download URL available!");
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_RED);
+    tft.drawString("ERROR!", 160, 80, 2);
+    tft.setTextColor(TFT_WHITE);
+    tft.drawString("No download URL", 160, 110, 1);
+    delay(3000);
+    isUpdating = false;
+    currentState = FIRMWARE_SETTINGS;
+    drawFirmwareScreen();
+    return;
+  }
+  
+  String firmwareURL = downloadURL;  // Používáme přesnou URL z version.json
+  Serial.println("[OTA] Downloading from: " + firmwareURL);
+  Serial.println("[OTA] Installing version: " + availableVersion);
+  
+  HTTPClient http;
+  
+  // OPRAVA: Povolit sledování přesměrování (GitHub vrací 302 pro download linky)
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  
+  http.begin(firmwareURL);
+  http.setTimeout(30000);  // 30s timeout
+  int httpCode = http.GET();
+  
+  // Pokud dojde k přesměrování, httpCode bude nyní 200 (z finální URL)
+  if (httpCode == 200) {
+    int contentLength = http.getSize();
+    bool canBegin = Update.begin(contentLength);
+    
+    if (canBegin) {
+      WiFiClient * client = http.getStreamPtr();
+      
+      size_t written = 0;
+      uint8_t buff[128];
+      int lastProgress = -1;
+      
+      // ========== FÁZE 1: DOWNLOADING ==========
+      while (http.connected() && (written < contentLength)) {
+        size_t available = client->available();
+        if (available) {
+          int bytesRead = client->readBytes(buff, min(available, sizeof(buff)));
+          written += Update.write(buff, bytesRead);
+          
+          updateProgress = (written * 100) / contentLength;
+          
+          // Aktualizace pouze pokud se progress změnil
+          if (updateProgress != lastProgress) {
+            lastProgress = updateProgress;
+            
+            // Vymazání předchozího textu
+            tft.fillRect(0, 60, 320, 130, TFT_BLACK);
+            
+            // Text "Downloading"
+            tft.setTextColor(TFT_CYAN);
+            tft.drawString("Downloading...", 160, 70, 2);
+            
+            // Progress bar - downloading
+            tft.drawRoundRect(40, 100, 240, 25, 4, TFT_DARKGREY);
+            tft.fillRoundRect(42, 102, (updateProgress * 236) / 100, 21, 3, TFT_CYAN);
+            
+            // Procenta
+            tft.setTextColor(TFT_WHITE);
+            tft.drawString(String(updateProgress) + "%", 160, 112, 2);
+            
+            // Velikost stažených dat
+            tft.setTextColor(TFT_LIGHTGREY);
+            String sizeStr = String(written / 1024) + " / " + String(contentLength / 1024) + " KB";
+            tft.drawString(sizeStr, 160, 140, 1);
+            
+            if (updateProgress % 10 == 0) {
+              Serial.print("[OTA] Downloading: ");
+              Serial.print(updateProgress);
+              Serial.println("%");
+            }
+          }
+        }
+        delay(1);
+      }
+      
+      // ========== FÁZE 2: INSTALLING ==========
+      tft.fillRect(0, 60, 320, 130, TFT_BLACK);
+      tft.setTextColor(TFT_ORANGE);
+      tft.drawString("Installing...", 160, 70, 2);
+      
+      // Progress bar - installing (animace)
+      for (int i = 0; i <= 100; i += 5) {
+        tft.drawRoundRect(40, 100, 240, 25, 4, TFT_DARKGREY);
+        tft.fillRoundRect(42, 102, (i * 236) / 100, 21, 3, TFT_ORANGE);
+        tft.setTextColor(TFT_WHITE);
+        tft.drawString(String(i) + "%", 160, 112, 2);
+        delay(50);
+      }
+      
+      Serial.println("[OTA] Finalizing update...");
+      
+      if (Update.end(true)) {
+        updateStatus = "Update successful!";
+        Serial.println("[OTA] ✓ Update successful!");
+        
+        tft.fillScreen(TFT_BLACK);
+        tft.setTextColor(TFT_GREEN);
+        tft.drawString("UPDATE SUCCESS!", 160, 100, 2);
+        tft.setTextColor(TFT_WHITE);
+        tft.drawString("Rebooting...", 160, 130, 1);
+        delay(2000);
+        ESP.restart();
+        
+      } else {
+        // ========== SELHÁNÍ - ROLLBACK ==========
+        updateStatus = "Update failed!";
+        Serial.println("[OTA] ✗ Update failed!");
+        Serial.println(Update.errorString());
+        
+        tft.fillScreen(TFT_BLACK);
+        tft.setTextColor(TFT_RED);
+        tft.drawString("UPDATE FAILED!", 160, 80, 2);
+        
+        tft.setTextColor(TFT_ORANGE);
+        tft.drawString("Rolling back to", 160, 110, 1);
+        tft.drawString("previous version...", 160, 125, 1);
+        
+        // Odpočítávání 10 sekund
+        for (int i = 10; i > 0; i--) {
+          tft.fillRect(140, 150, 40, 20, TFT_BLACK);
+          tft.setTextColor(TFT_WHITE);
+          tft.drawString(String(i), 160, 160, 2);
+          delay(1000);
+        }
+        
+        // Návrat do Firmware menu
+        isUpdating = false;
+        currentState = FIRMWARE_SETTINGS;
+        drawFirmwareScreen();
+        return;
+      }
+      
+    } else {
+      // ========== NEDOSTATEK MÍSTA ==========
+      updateStatus = "Not enough space!";
+      Serial.println("[OTA] ✗ Not enough space!");
+      
+      tft.fillScreen(TFT_BLACK);
+      tft.setTextColor(TFT_RED);
+      tft.drawString("ERROR!", 160, 80, 2);
+      tft.setTextColor(TFT_WHITE);
+      tft.drawString("Not enough storage", 160, 110, 1);
+      tft.drawString("space for update", 160, 125, 1);
+      
+      for (int i = 10; i > 0; i--) {
+        tft.fillRect(140, 150, 40, 20, TFT_BLACK);
+        tft.drawString(String(i), 160, 160, 2);
+        delay(1000);
+      }
+      
+      isUpdating = false;
+      currentState = FIRMWARE_SETTINGS;
+      drawFirmwareScreen();
+      http.end();
+      return;
+    }
+    
+  } else {
+    // ========== CHYBA STAHOVÁNÍ ==========
+    updateStatus = "Download failed!";
+    Serial.print("[OTA] ✗ HTTP error: ");
+    Serial.println(httpCode);
+    
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_RED);
+    tft.drawString("DOWNLOAD FAILED!", 160, 80, 2);
+    tft.setTextColor(TFT_WHITE);
+    tft.drawString("HTTP Error: " + String(httpCode), 160, 110, 1);
+    tft.drawString("Check your connection", 160, 125, 1);
+    
+    for (int i = 10; i > 0; i--) {
+      tft.fillRect(140, 150, 40, 20, TFT_BLACK);
+      tft.drawString(String(i), 160, 160, 2);
+      delay(1000);
+    }
+    
+    isUpdating = false;
+    currentState = FIRMWARE_SETTINGS;
+    drawFirmwareScreen();
+    http.end();
+    return;
+  }
+  
+  http.end();
+  isUpdating = false;
+}
+
 void setup() {
   Serial.begin(115200);
   
@@ -2944,6 +3252,11 @@ void setup() {
   themeMode = prefs.getInt("themeMode", 0);
   isWhiteTheme = prefs.getBool("theme", false);
   invertColors = prefs.getBool("invertColors", false);
+
+  // Načtení OTA nastavení
+otaInstallMode = prefs.getInt("otaMode", 1);  // Default: By user
+Serial.print("[OTA] Install mode: ");
+Serial.println(otaInstallMode);
   
    // OPRAVA: Načtení nastavení jasu a Auto Dim
   brightness = prefs.getInt("bright", 255); // Načteme i uložený jas
@@ -3056,45 +3369,90 @@ void setup() {
   Serial.println("[SETUP] === Setup complete ===\n");
 }
 
+String getNamedayForDate(int day, int month) {
+  // Hardcoded ceske svatky bez diakritiky - pouze pro Czech Republic
+  static const char* namedays[13][32] = {
+    {}, // mesic 0 (neexistuje)
+    {"--","Novy rok","Karina","Radmila","Diana","Dalimil","Tri krále","Vilma","Ctirad","Adrian","Brezislav","Bohdana","Pravoslav","Edita","Radovan","Alice","Ctirad","Drahoslav","Vladislav","Doubravka","Ilona","Elian","Slavomir","Zdenek","Milena","Milos","Zora","Ingrid","Otyla","Zdislava","Robin","Marika"}, // Leden
+    {"--","Hynek","Nela","Blazej","Jarmila","Dobromila","Vanda","Veronika","Milada","Apolena","Mojmir","Bozena","Slavena","Vendelin","Valentin","Jiri","Ljuba","Miloslav","Gizela","Patrik","Oldrich","Lenka","Petr","Svatopluk","Matej","Liliana","Dorotea","Alexandr","Lumír","Horymír","--","--"}, // Unor
+    {"--","Bedrich","Anezka","Kamil","Stela","Kazimir","Miroslav","Tomas","Gabriela","Franciska","Viktorie","Andelka","Rehore","Ruzena","Matylda","Kristyna","Lubomir","Vlastimil","Eduard","Josef","Svetlana","Radek","Leona","Ivona","Gabriel","Marian","Emanuel","Dita","Sonar","Taťana","Arnošt","Kveta"}, // Brezen
+    {"--","Hugo","Erika","Richard","Ivana","Miroslava","Vendula","Herman","Ema","Dusan","Darja","Izabela","Julius","Ales","Vincenc","Anastázie","Irena","Rudolf","Valerie","Rostislav","Marcela","Alexandr","Evženie","Vojtech","Jiri","Marek","Oto","Jaroslav","Vlastislav","Robert","Blahoslav","--"}, // Duben
+    {"--","Svátek práce","Zikmund","Alexej","Květoslav","Klaudie","Radoslav","Stanislav","Den vítězství","Ctibor","Blažena","Svatava","Pankrac","Servác","Bonifác","Žofie","Přemysl","Aneta","Nataša","Ivo","Zbyšek","Monika","Emil","Vladimír","Jana","Viola","Filip","Valdemar","Vilém","Maxim","Ferdinand","Kamila"}, // Kveten
+    {"--","Laura","Jarmil","Tamara","Dalibor","Dobroslav","Norbert","Iveta","Medard","Stanislava","Gita","Bruno","Antonie","Antonín","Roland","Vít","Zbyněk","Adolf","Milan","Leoš","Květa","Alois","Pavla","Zdeňka","Jan","Ivan","Adriana","Ladislav","Lubomír","Petr a Pavel","Šárka","--"}, // Cerven
+    {"--","Jaroslava","Patricie","Radomír","Prokop","Cyril a Metoděj","Jan Hus","Bohuslava","Nora","Drahoslava","Libuše a Amálie","Olga","Bořek","Markéta","Karolína","Jindřich","Luboš","Martina","Drahomíra","Čeněk","Ilja","Vítězslav","Magdaléna","Libor","Kristýna","Jakub","Anna","Věroslav","Viktor","Marta","Bořivoj","Ignác"}, // Cervenec
+    {"--","Oskar","Gustav","Miluše","Dominik","Kristián","Oldřiška","Lada","Soběslav","Roman","Vavřinec","Zuzana","Klára","Alena","Alan","Hana","Jáchym","Petra","Helena","Ludvík","Bernard","Johana","Bohuslav","Sandra","Bartoloměj","Radim","Luděk","Otakar","Augustýn","Evelína","Vladěna","Pavlína"}, // Srpen
+    {"--","Linda","Adéla","Bronislav","Jindřiška","Boris","Boleslav","Regína","Mariana","Daniela","Irma","Denisa","Marie","Lubor","Radka","Jolana","Ludmila","Naděžda","Kryštof","Zita","Oleg","Matouš","Darina","Berta","Jaromír","Zlata","Andrea","Jonáš","Václav","Michal","Jeroným","--"}, // Zari
+    {"--","Igor","Olivie","Bohumil","František","Eliška","Hanuš","Justýna","Věra","Štefan","Marina","Andrej","Marcel","Renáta","Agáta","Tereza","Havel","Hedvika","Lukáš","Michaela","Vendelín","Brigita","Sabina","Teodor","Nina","Beáta","Erik","Šarlota","Státní svátek","Silvie","Tadeáš","Štěpánka"}, // Rijen
+    {"--","Felix","Památka zesnulých","Hubert","Karel","Miriam","Liběna","Saskie","Bohumír","Bohdan","Evžen","Martin","Benedikt","Tibor","Sáva","Leopold","Otmar","Den boje za svobodu","Romana","Alžběta","Nikola","Albert","Cecílie","Klement","Emílie","Kateřina","Artur","Xenie","René","Zina","Ondřej","--"}, // Listopad
+    {"--","Iva","Blanka","Svatoslav","Barbora","Jitka","Mikuláš","Ambrož","Květoslava","Vratislav","Julie","Dana","Simona","Lucie","Lýdie","Radana","Albína","Daniel","Miloslav","Ester","Dagmar","Natálie","Šimon","Vlasta","Štědrý den","1. svátek vánoční","2. svátek vánoční","Žaneta","Bohumila","Judita","David","Silvestr"} // Prosinec
+  };
+  
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "--";
+  return String(namedays[month][day]);
+}
+
 void handleNamedayUpdate() {
+  // Pouze pro Czech Republic - hardcoded svatky
+  if (selectedCountry != "Czech Republic") {
+    namedayValid = false;
+    todayNameday = "--";
+    return;
+  }
+
   time_t now = time(nullptr);
   struct tm *timeinfo = localtime(&now);
 
-  if (!timeinfo) return;
-  if (timeinfo->tm_year < 125) return;
+  if (!timeinfo) {
+    namedayValid = false;
+    todayNameday = "--";
+    return;
+  }
+  
+  if (timeinfo->tm_year < 125) {
+    namedayValid = false;
+    todayNameday = "--";
+    return;
+  }
 
   int today = timeinfo->tm_mday;
+  int month = timeinfo->tm_mon + 1;
   int hour = timeinfo->tm_hour;
-  int second = timeinfo->tm_sec;
 
-  // Check if day changed
+  // Aktualizace svatku pri zmene dne
   if (today != lastNamedayDay) {
-    // Day changed, update immediately
     lastNamedayDay = today;
     lastNamedayHour = hour;
 
-    Serial.print("[NAMEDAY] Fetching nameday for day ");
-    Serial.println(String(today));
+    Serial.print("[NAMEDAY] Getting nameday for day ");
+    Serial.print(String(today));
+    Serial.print(".");
+    Serial.println(String(month));
 
-    if (!fetchNameday()) {
-      Serial.println("[NAMEDAY] Fetch failed");
+    todayNameday = getNamedayForDate(today, month);
+    namedayValid = (todayNameday != "--");
+
+    if (namedayValid) {
+      Serial.print("[NAMEDAY] SUCCESS: ");
+      Serial.println(todayNameday);
+      forceClockRedraw = true;
+    } else {
+      Serial.println("[NAMEDAY] No nameday for this date");
     }
   } else if (hour == 0 && lastNamedayHour != 0) {
-    // Midnight detected (00:xx:xx and previous hour was not 0)
+    // Pulnocni kontrola
     lastNamedayHour = hour;
     
-    // Check if it's 00:00:05 to 00:00:10 range (wait 5 seconds from midnight)
-    if (second >= 5 && second <= 10) {
-      Serial.println("[NAMEDAY] Midnight detected at 00:00:" + String(second) + " - fetching nameday...");
+    time_t now2 = time(nullptr);
+    struct tm *timeinfo2 = localtime(&now2);
+    if (timeinfo2 && timeinfo2->tm_mday != lastNamedayDay) {
+      lastNamedayDay = timeinfo2->tm_mday;
+      month = timeinfo2->tm_mon + 1;
+      todayNameday = getNamedayForDate(lastNamedayDay, month);
+      namedayValid = (todayNameday != "--");
       
-      // Check if day has actually changed (just to be safe)
-      time_t now2 = time(nullptr);
-      struct tm *timeinfo2 = localtime(&now2);
-      if (timeinfo2 && timeinfo2->tm_mday != lastNamedayDay) {
-        lastNamedayDay = timeinfo2->tm_mday;
-        if (!fetchNameday()) {
-          Serial.println("[NAMEDAY] Fetch failed at midnight");
-        }
+      if (namedayValid) {
+        Serial.println("[NAMEDAY] Midnight update: " + todayNameday);
+        forceClockRedraw = true;
       }
     }
   } else {
@@ -3415,30 +3773,62 @@ void loop() {
       }
 
       case SETTINGS: {
+        // Tlačítko ZPĚT (červené)
         if (x >= 230 && x <= 280 && y >= 125 && y <= 175) {
           currentState = CLOCK;
           lastSec = -1;
-        } else if (isTouchInMenuItem(y, 0)) {
-          if (0 + menuOffset >= 0 && 0 + menuOffset < 4) {
-            currentState = WIFICONFIG;
-            scanWifiNetworks();
-            wifiOffset = 0;
-            drawInitialSetup();
-          }
-        } else if (isTouchInMenuItem(y, 1)) {
-          if (1 + menuOffset >= 1 && 1 + menuOffset < 4) {
-            currentState = WEATHERCONFIG;
-            drawWeatherScreen();
-          }
-        } else if (isTouchInMenuItem(y, 2)) {
-          if (2 + menuOffset >= 2 && 2 + menuOffset < 4) {
-            currentState = REGIONALCONFIG;
-            drawRegionalScreen();
-          }
-        } else if (isTouchInMenuItem(y, 3)) {
-          if (3 + menuOffset >= 3 && 3 + menuOffset < 4) {
-            currentState = GRAPHICSCONFIG;
-            drawGraphicsScreen();
+          delay(150);
+        } 
+        // Šipka nahoru
+        else if (menuOffset > 0 && x >= 230 && x <= 280 && y >= 70 && y <= 120) {
+          menuOffset--;
+          drawSettingsScreen();
+          delay(150);
+        }
+        // Šipka dolů
+        else if (menuOffset < 1 && x >= 230 && x <= 280 && y >= 180 && y <= 230) {
+          menuOffset++;
+          drawSettingsScreen();
+          delay(150);
+        }
+        // Detekce kliknutí na položky menu
+        else {
+          for (int i = 0; i < 4; i++) {  // 4 viditelné položky na obrazovce
+            if (isTouchInMenuItem(y, i)) {
+              int actualItem = i + menuOffset;  // Přepočet: vizuální pozice → skutečná položka
+              
+              switch(actualItem) {
+                case 0: // WiFi Setup
+                  currentState = WIFICONFIG;
+                  scanWifiNetworks();
+                  wifiOffset = 0;
+                  drawInitialSetup();
+                  break;
+                  
+                case 1: // Weather
+                  currentState = WEATHERCONFIG;
+                  drawWeatherScreen();
+                  break;
+                  
+                case 2: // Regional
+                  currentState = REGIONALCONFIG;
+                  drawRegionalScreen();
+                  break;
+                  
+                case 3: // Graphics
+                  currentState = GRAPHICSCONFIG;
+                  drawGraphicsScreen();
+                  break;
+                  
+                case 4: // Firmware
+                  currentState = FIRMWARE_SETTINGS;
+                  drawFirmwareScreen();
+                  break;
+              }
+              
+              delay(150);
+              break;  // Vyskočit z for cyklu
+            }
           }
         }
         break;
@@ -3840,6 +4230,60 @@ void loop() {
         }
         break;
       }
+case FIRMWARE_SETTINGS: {
+        // Tlačítko ZPĚT (sjednocená pozice jako ostatní menu)
+        if (x >= 230 && x <= 280 && y >= 125 && y <= 175) {
+          currentState = SETTINGS;
+          menuOffset = 0;
+          drawSettingsScreen();
+          delay(150);
+          break;
+        }
+        
+        // Radio buttons pro režim (jen Auto a By user)
+        // V drawFirmwareScreen:
+        // yPos = 60 (Current) → 85 (Available) → 120 (Install mode) → 145 (první radio button)
+        // První radio button: btnY = 145 + (0 * 25) = 145
+        // Druhý radio button: btnY = 145 + (1 * 25) = 170
+        for (int i = 0; i < 2; i++) {
+          int btnY = 145 + (i * 25);  // OPRAVENO: 145 místo 120!
+          // Kruh má střed na btnY, poloměr 6px
+          // Klikatelná oblast: větší pro lepší UX (±10px od středu)
+          if (x >= 10 && x <= 30 && y >= btnY - 10 && y <= btnY + 10) {
+            otaInstallMode = i;
+            prefs.begin("sys", false);
+            prefs.putInt("otaMode", otaInstallMode);
+            prefs.end();
+            Serial.print("[OTA] Install mode changed to: ");
+            Serial.println(i == 0 ? "Auto" : "By user");
+            drawFirmwareScreen();
+            delay(150);
+            break;
+          }
+        }
+        
+        // Tlačítko CHECK NOW / INSTALL
+        if (x >= 10 && x <= 150 && y >= 190 && y <= 220) {
+          if (updateAvailable) {
+            // INSTALL - vždy provedeme update (Manual režim už neexistuje)
+            performOTAUpdate();
+          } else {
+            // CHECK NOW
+            tft.fillScreen(TFT_BLACK);
+            tft.setTextColor(TFT_WHITE);
+            tft.setTextDatum(MC_DATUM);
+            tft.drawString("CHECKING...", 160, 100, 2);
+            
+            checkForUpdate();
+            
+            delay(1000);
+            drawFirmwareScreen();
+          }
+          delay(150);
+          break;
+        }
+        break;
+      }
 
       case GRAPHICSCONFIG: {
         // ... (Kód pro Témata zůstává stejný) ...
@@ -4038,6 +4482,7 @@ void loop() {
           // Tato funkce si už vezme čerstvá data
           drawSettingsIcon(TFT_SKYBLUE);
           drawWifiIndicator();
+          drawUpdateIndicator();
         }
 
         updateHands(ti.tm_hour, ti.tm_min, ti.tm_sec);
@@ -4051,6 +4496,7 @@ void loop() {
         drawDateAndWeek(&ti);
         drawSettingsIcon(TFT_SKYBLUE);
         drawWifiIndicator();
+        drawUpdateIndicator();
       }
     }
 
@@ -4059,6 +4505,30 @@ void loop() {
         fetchWeatherData();
         drawWeatherSection();
         lastWeatherUpdate = millis();
+      }
+    }
+  }
+// OTA verze check (při startu a každých X hodin)
+  if (!isUpdating && WiFi.status() == WL_CONNECTED) {
+    if (lastVersionCheck == 0 || (millis() - lastVersionCheck > VERSION_CHECK_INTERVAL)) {
+      checkForUpdate();
+
+      // Debug: Zobrazíme co jsme načetli
+      if (updateAvailable) {
+        Serial.println("[OTA] Update check complete:");
+        Serial.println("[OTA]   Version: " + availableVersion);
+        Serial.println("[OTA]   URL: " + downloadURL);
+      }
+      
+      // Pokud je dostupná aktualizace, vynutíme překreslení ikon
+      if (updateAvailable && currentState == CLOCK) {
+        drawUpdateIndicator();  // Okamžitě zobrazíme ikonu
+      }
+      
+      // Pokud je dostupná aktualizace a režim je AUTO
+      if (updateAvailable && otaInstallMode == 0) {
+        Serial.println("[OTA] Auto-update mode - starting update...");
+        performOTAUpdate();
       }
     }
   }
