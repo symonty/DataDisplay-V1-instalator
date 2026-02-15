@@ -32,7 +32,7 @@ bool is12hFormat = false;    // false = 24h, true = 12h
 bool invertColors = false;  // NOVÁ PROMĚNNÁ: Invertování barev pro CYD desky s invertovaným displejem
 
 // ================= OTA UPDATE GLOBALS =================
-const char* FIRMWARE_VERSION = "1.2.1";  // AKTUÁLNÍ VERZE
+const char* FIRMWARE_VERSION = "1.3";  // AKTUÁLNÍ VERZE
 const char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/lachimalaif/DataDisplay-V1-instalator/main/version.json";
 const char* FIRMWARE_URL = "https://github.com/lachimalaif/DataDisplay-V1-instalator/releases/latest/download/DataDisplayCYD.ino.bin";
 
