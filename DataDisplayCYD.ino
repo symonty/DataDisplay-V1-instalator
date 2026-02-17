@@ -1,15 +1,15 @@
-//update funguje - prověřit, opravit vykreslovani a blikani progress baru
+//update works - verify, fix rendering and progress bar flicker
 
 
-// oprava nacteni lokace po vybrani mista ze seznamu
-//pridana volbe jednotky kmh/mph a jeji ukladani do pressetu do menu weather
-// Invert pridano a ukladano 9.3.
-// oprava zapominani timezone u manual po resetu 9.3.
-// oprava zapominani zvoleného tématu po resetu 9.3.
-// oprava zapominani nastaveni autodim po resetu 9.3.
-// oprava zapominani nastaveni jednotky teploty po resetu 9.3.
-// oprava zobrazeni o vyprseni timeoutu a bad answer z api
-// lunar phase oprava
+// fix loading location after choosing from the list
+// added km/h vs mph unit choice and saving it in the weather preset menu
+// invert added and saved 9.3.
+// fix forgetting timezone in manual mode after reset 9.3.
+// fix forgetting selected theme after reset 9.3.
+// fix forgetting autodim settings after reset 9.3.
+// fix forgetting temperature unit after reset 9.3.
+// fix display for timeout expired and bad answer from API
+// lunar phase fix
 
 #include <WiFi.h>
 #include <Preferences.h>
@@ -22,43 +22,43 @@
 #include <Update.h>
 #include <esp_ota_ops.h>
 
-// ================= GLOBÁLNÍ NASTAVENÍ (Musí být PRVNÍ) =================
+// ================= GLOBAL SETTINGS (must be first) =================
 TFT_eSPI tft = TFT_eSPI();
 Preferences prefs;
-bool isWhiteTheme = false;  // TEĎ JE TO TADY, TAKŽE TO VŠICHNI VIDÍ
-// ================= NOVÉ PROMĚNNÉ PRO HODINY =================
+bool isWhiteTheme = false;  // NOW IT IS HERE, SO EVERYONE SEES IT
+// ================= NEW CLOCK VARIABLES =================
 bool isDigitalClock = false; // false = Analog, true = Digital
 bool is12hFormat = false;    // false = 24h, true = 12h
-bool invertColors = false;  // NOVÁ PROMĚNNÁ: Invertování barev pro CYD desky s invertovaným displejem
+bool invertColors = false;  // NEW VARIABLE: color inversion for CYD boards with inverted display
 
 // ================= OTA UPDATE GLOBALS =================
-const char* FIRMWARE_VERSION = "1.3";  // AKTUÁLNÍ VERZE
+const char* FIRMWARE_VERSION = "1.3";  // CURRENT VERSION
 const char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/lachimalaif/DataDisplay-V1-instalator/main/version.json";
 const char* FIRMWARE_URL = "https://github.com/lachimalaif/DataDisplay-V1-instalator/releases/latest/download/DataDisplayCYD.ino.bin";
 
-String availableVersion = "";  // Dostupná verze z GitHubu
-String downloadURL = "";       // URL pro stažení firmware (z version.json)
-bool updateAvailable = false;  // Je k dispozici aktualizace?
+String availableVersion = "";  // Available version from GitHub
+String downloadURL = "";       // URL for firmware download (from version.json)
+bool updateAvailable = false;  // Update available?
 int otaInstallMode = 1;  // 0=Auto, 1=By user, 2=Manual
 unsigned long lastVersionCheck = 0;
-const unsigned long VERSION_CHECK_INTERVAL = 86400000;  // 24 hodin (pro testování změň na 30000 = 30s)
+const unsigned long VERSION_CHECK_INTERVAL = 86400000;  // 24 hours (for testing change to 30000 = 30s)
 
-bool isUpdating = false;  // Probíhá aktualizace?
+bool isUpdating = false;  // Update in progress?
 int updateProgress = 0;   // Progress 0-100%
-String updateStatus = ""; // Status zpráva
+String updateStatus = ""; // Status message
 
-// ================= TEMA NASTAVENI =================
+// ================= THEME SETTINGS =================
 int themeMode = 0; // 0 = BLACK, 1 = WHITE, 2 = BLUE, 3 = YELLOW
-// POZN: U tématech BLACK a WHITE určuje isWhiteTheme: false=BLACK, true=WHITE
-// U tématech BLUE a YELLOW je isWhiteTheme ignorován (pevné barvy)
+// Note: For BLACK and WHITE themes, isWhiteTheme decides: false=BLACK, true=WHITE
+// For BLUE and YELLOW themes, isWhiteTheme is ignored (fixed colors)
 
-float themeTransition = 0.0f; // Průběh přechodu (0.0 - 1.0)
+float themeTransition = 0.0f; // Transition progress (0.0 - 1.0)
 
-// Barvy s přechody
-uint16_t blueLight = 0x07FF;    // Světle modrá
-uint16_t blueDark = 0x0010;     // Tmavě modrá
-uint16_t yellowLight = 0xFFE0;  // Světle žlutá
-uint16_t yellowDark = 0xCC00;   // Tmavě žlutá
+// Colors with gradients
+uint16_t blueLight = 0x07FF;    // Light blue
+uint16_t blueDark = 0x0010;     // Dark blue
+uint16_t yellowLight = 0xFFE0;  // Light yellow
+uint16_t yellowDark = 0xCC00;   // Dark yellow
 
 
 // ================= WEATHER GLOBALS =================
@@ -82,21 +82,21 @@ struct ForecastData {
   float tempMin;
 };
 ForecastData forecast[2]; 
-// Proměnné pro dny předpovědi
-String forecastDay1Name = "Mon";  // Zítra
-String forecastDay2Name = "Tue";  // Pozítří
+// Variables for forecast days
+String forecastDay1Name = "Mon";  // Tomorrow
+String forecastDay2Name = "Tue";  // Day after tomorrow
 
 int moonPhaseVal = 0; 
 
-// ================= SLUNCE A AUTO DIM (NOVÉ Z control.txt) =================
+// ================= SUN AND AUTO DIM (NEW FROM control.txt) =================
 String sunriseTime = "--:--";
 String sunsetTime = "--:--";
-// ================= AUTODIM UI - NASTAVENÍ V MENU =================
+// ================= AUTODIM UI - SETTINGS IN MENU =================
 int autoDimEditMode = 0;  // 0=none, 1=editing start, 2=editing end, 3=editing level
 int autoDimTempStart = 22;
 int autoDimTempEnd = 6;
 int autoDimTempLevel = 20;
-unsigned long lastBrightnessUpdate = 0;  // Aby se jas neměnil při každém loopu
+unsigned long lastBrightnessUpdate = 0;  // Avoid brightness changes every loop
 
 bool autoDimEnabled = false;
 int autoDimStart = 22; 
@@ -104,7 +104,7 @@ int autoDimEnd = 6;
 int autoDimLevel = 20; 
 bool isDimmed = false; 
 
-// Ikony Slunce
+// Sun icons
 const unsigned char icon_sunrise[] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x01, 0x80, 0x01, 0x80, 0x09, 0x90, 0x05, 0xa0, 0x03, 0xc0,
   0x01, 0x80, 0x7f, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
@@ -114,7 +114,7 @@ const unsigned char icon_sunset[] PROGMEM = {
   0x09, 0x90, 0x01, 0x80, 0x01, 0x80, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-// ================= MODERNÍ VEKTOROVÉ IKONY =================
+// ================= MODERN VECTOR ICONS =================
 
 void drawCloudVector(int x, int y, uint32_t color) {
   tft.fillCircle(x + 10, y + 15, 8, color);
@@ -124,58 +124,58 @@ void drawCloudVector(int x, int y, uint32_t color) {
 }
 
 void drawWeatherIconVector(int code, int x, int y) {
-  // Barvy ikon se adaptují na téma
+  // Icon colors adapt to the theme
   uint16_t cloudCol = TFT_SILVER; 
-  uint16_t shadowCol = isWhiteTheme ? 0x8410 : 0x4208; // Stín v modrém/žlutém tématu
+  uint16_t shadowCol = isWhiteTheme ? 0x8410 : 0x4208; // Shadow in blue/yellow theme
   
   switch (code) {
-    case 0: // Jasno
-      // Sluníčko s odstínem
+    case 0: // Clear
+      // Sun with shading
       tft.fillCircle(x + 16, y + 16, 10, TFT_YELLOW);
-      tft.drawCircle(x + 16, y + 16, 11, shadowCol); // Stín
+      tft.drawCircle(x + 16, y + 16, 11, shadowCol); // Shadow
       for (int i = 0; i < 360; i += 45) {
         float rad = i * 0.01745;
         tft.drawLine(x+16+cos(rad)*11, y+16+sin(rad)*11, x+16+cos(rad)*16, y+16+sin(rad)*16, TFT_YELLOW);
       }
       break;
     
-    case 1: case 2: case 3: // Polojasno
+    case 1: case 2: case 3: // Partly cloudy
       tft.fillCircle(x + 22, y + 10, 8, TFT_YELLOW);
-      tft.drawCircle(x + 22, y + 10, 9, shadowCol); // Stín
+      tft.drawCircle(x + 22, y + 10, 9, shadowCol); // Shadow
       drawCloudVector(x, y + 5, cloudCol);
       break;
     
-    case 45: case 48: // Mlha
+    case 45: case 48: // Fog
       for(int i=0; i<3; i++) {
         tft.fillRoundRect(x+4, y+12+(i*6), 24, 3, 2, TFT_SILVER);
-        tft.drawRoundRect(x+4, y+12+(i*6), 24, 3, 2, shadowCol); // Stín
+        tft.drawRoundRect(x+4, y+12+(i*6), 24, 3, 2, shadowCol); // Shadow
       }
       break;
     
-    case 51: case 53: case 55: case 61: case 63: case 65: // Déšť
+    case 51: case 53: case 55: case 61: case 63: case 65: // Rain
       drawCloudVector(x, y + 2, TFT_SILVER);
       for(int i=0; i<3; i++) {
         tft.fillRoundRect(x+10+(i*6), y+22, 2, 6, 1, TFT_BLUE);
-        tft.drawRoundRect(x+10+(i*6), y+22, 2, 6, 1, shadowCol); // Stín kapky
+        tft.drawRoundRect(x+10+(i*6), y+22, 2, 6, 1, shadowCol); // Drop shadow
       }
       break;
     
-    case 71: case 73: case 75: case 77: // Sníh
+    case 71: case 73: case 75: case 77: // Snow
       drawCloudVector(x, y + 2, cloudCol);
       tft.setTextColor(TFT_SKYBLUE);
       tft.drawString("*", x + 12, y + 22); 
       tft.drawString("*", x + 22, y + 22);
       break;
     
-    case 80: case 81: case 82: // Přeháňky
+    case 80: case 81: case 82: // Showers
       tft.fillCircle(x + 22, y + 10, 7, TFT_YELLOW);
-      tft.drawCircle(x + 22, y + 10, 8, shadowCol); // Stín
+      tft.drawCircle(x + 22, y + 10, 8, shadowCol); // Shadow
       drawCloudVector(x, y + 2, TFT_SILVER);
       tft.fillRoundRect(x + 16, y + 22, 2, 6, 1, TFT_BLUE);
       break;
     
-    case 95: case 96: case 99: // Bouřka
-      drawCloudVector(x, y + 2, shadowCol); // Tmavý mrak
+    case 95: case 96: case 99: // Storm
+      drawCloudVector(x, y + 2, shadowCol); // Dark cloud
       tft.drawLine(x+18, y+20, x+14, y+28, TFT_YELLOW);
       tft.drawLine(x+14, y+28, x+20, y+28, TFT_YELLOW);
       tft.drawLine(x+20, y+28, x+16, y+36, TFT_YELLOW);
@@ -188,19 +188,19 @@ void drawWeatherIconVector(int code, int x, int y) {
 }
 
 // ============================================
-// NOVÁ FUNKCE: Zmenšené ikony pro forecast
+// NEW FUNCTION: Smaller icons for forecast
 // ============================================
 
 void drawWeatherIconVectorSmall(int code, int x, int y) {
-  // Zmenšená verze pro forecast, ale s lepšími proporcemi
-  // Některé prvky zůstávají proporčnější
+  // Smaller version for forecast with better proportions
+  // Some elements remain more proportional
   
   uint16_t cloudCol = TFT_SILVER; 
   uint16_t shadowCol = isWhiteTheme ? 0x8410 : 0x4208;
   
   switch (code) {
-    case 0: // Jasno
-      // Slunko - stejná velikost jako v normální verzi (malý radius)
+    case 0: // Clear
+      // Sun - same size as normal version (small radius)
       tft.fillCircle(x + 16, y + 16, 9, TFT_YELLOW);
       tft.drawCircle(x + 16, y + 16, 10, shadowCol);
       for (int i = 0; i < 360; i += 45) {
@@ -209,76 +209,76 @@ void drawWeatherIconVectorSmall(int code, int x, int y) {
       }
       break;
     
-    case 1: case 2: case 3: // Polojasno - SLUNKO + MRAK
-      // Slunko - větší, viditelné
+    case 1: case 2: case 3: // Partly cloudy - SUN + CLOUD
+      // Sun - larger, visible
       tft.fillCircle(x + 20, y + 10, 7, TFT_YELLOW);
       tft.drawCircle(x + 20, y + 10, 8, shadowCol);
-      // Mrak - menší proporce
+      // Cloud - smaller proportions
       tft.fillCircle(x + 8, y + 14, 6, cloudCol);
       tft.fillCircle(x + 14, y + 11, 7, cloudCol);
       tft.fillCircle(x + 20, y + 14, 5, cloudCol);
       tft.fillRoundRect(x + 8, y + 14, 15, 5, 2, cloudCol);
       break;
     
-    case 45: case 48: // Mlha
+    case 45: case 48: // Fog
       for(int i=0; i<3; i++) {
         tft.fillRoundRect(x+4, y+12+(i*5), 20, 2, 1, TFT_SILVER);
         tft.drawRoundRect(x+4, y+12+(i*5), 20, 2, 1, shadowCol);
       }
       break;
     
-    case 51: case 53: case 55: case 61: case 63: case 65: // Déšť
-      // Mrak - 80% velikosti
+    case 51: case 53: case 55: case 61: case 63: case 65: // Rain
+      // Cloud - 80% size
       tft.fillCircle(x + 9, y + 13, 6, cloudCol);
       tft.fillCircle(x + 15, y + 10, 8, cloudCol);
       tft.fillCircle(x + 22, y + 13, 6, cloudCol);
       tft.fillRoundRect(x + 9, y + 13, 16, 6, 3, cloudCol);
-      // Kapky deště - 80% velikosti
+      // Raindrops - 80% size
       for(int i=0; i<3; i++) {
         tft.fillRoundRect(x+10+(i*5), y+21, 2, 5, 1, TFT_BLUE);
         tft.drawRoundRect(x+10+(i*5), y+21, 2, 5, 1, shadowCol);
       }
       break;
     
-    case 71: case 73: case 75: case 77: // Sníh
-      // Mrak - 80% velikosti
+    case 71: case 73: case 75: case 77: // Snow
+      // Cloud - 80% size
       tft.fillCircle(x + 9, y + 13, 6, cloudCol);
       tft.fillCircle(x + 15, y + 10, 8, cloudCol);
       tft.fillCircle(x + 22, y + 13, 6, cloudCol);
       tft.fillRoundRect(x + 9, y + 13, 16, 6, 3, cloudCol);
-      // Sníh - stejné hvězdičky
+      // Snow - same stars
       tft.setTextColor(TFT_SKYBLUE);
       tft.drawString("*", x + 11, y + 21); 
       tft.drawString("*", x + 19, y + 21);
       break;
     
-    case 80: case 81: case 82: // Přeháňky - SLUNKO + MRAK
-      // Slunko - viditelné
+    case 80: case 81: case 82: // Showers - SUN + CLOUD
+      // Sun - visible
       tft.fillCircle(x + 20, y + 10, 7, TFT_YELLOW);
       tft.drawCircle(x + 20, y + 10, 8, shadowCol);
-      // Mrak - menší
+      // Cloud - smaller
       tft.fillCircle(x + 8, y + 14, 6, cloudCol);
       tft.fillCircle(x + 14, y + 11, 7, cloudCol);
       tft.fillCircle(x + 20, y + 14, 5, cloudCol);
       tft.fillRoundRect(x + 8, y + 14, 15, 5, 2, cloudCol);
-      // Kapka - jednotlivá
+      // Single drop
       tft.fillRoundRect(x + 14, y + 21, 2, 5, 1, TFT_BLUE);
       break;
     
-    case 95: case 96: case 99: // Bouřka
-      // Tmavý mrak - 80% velikosti
+    case 95: case 96: case 99: // Storm
+      // Dark cloud - 80% size
       tft.fillCircle(x + 9, y + 13, 6, shadowCol);
       tft.fillCircle(x + 15, y + 10, 8, shadowCol);
       tft.fillCircle(x + 22, y + 13, 6, shadowCol);
       tft.fillRoundRect(x + 9, y + 13, 16, 6, 3, shadowCol);
-      // Blesk - 80% velikosti
+      // Lightning - 80% size
       tft.drawLine(x+15, y+20, x+12, y+27, TFT_YELLOW);
       tft.drawLine(x+12, y+27, x+17, y+27, TFT_YELLOW);
       tft.drawLine(x+17, y+27, x+14, y+34, TFT_YELLOW);
       break;
     
     default:
-      // Mrak - 80% velikosti
+      // Cloud - 80% size
       tft.fillCircle(x + 9, y + 13, 6, cloudCol);
       tft.fillCircle(x + 15, y + 10, 8, cloudCol);
       tft.fillCircle(x + 22, y + 13, 6, cloudCol);
@@ -289,38 +289,38 @@ void drawWeatherIconVectorSmall(int code, int x, int y) {
 
 
 // ============================================
-// ✅ NOVÁ FUNKCE PRO SPRÁVNÉ KRESLENÍ MĚSÍČNÍ FÁZE
+// OK NEW FUNCTION FOR CORRECT MOON PHASE DRAWING
 // ============================================
-// Vykresluje měsíční fázi (0-7) jako správnou grafiku
-// Použije správnou geometrii pro každou fázi
+// Draws moon phase (0-7) with correct graphics
+// Uses correct geometry for each phase
 
 void drawMoonPhaseIcon(int mx, int my, int r, int phase, uint16_t textColor, uint16_t bgColor) {
   
-  // Barva pozadí kruhu
+  // Circle background color
   uint16_t moonBg = (themeMode == 2) ? blueDark : (themeMode == 3) ? yellowDark : (isWhiteTheme ? 0xDEDB : 0x3186);
   uint16_t moonColor = TFT_YELLOW;
   uint16_t shadowColor = moonBg;
   
-  // Obrys kruhu
+  // Circle outline
   tft.drawCircle(mx, my, r, textColor);
   
-  // Vyplnění podle fáze
+  // Fill by phase
   switch(phase) {
     
     case 0: {
-      // NOV (New Moon) - Pouze obrys, vnitřek tmavý
+      // NEW MOON - Outline only, dark fill
       tft.fillCircle(mx, my, r - 1, shadowColor);
       break;
     }
     
     case 1: {
-      // WAXING CRESCENT - Srpek z PRAVÉ strany (křivá hranice)
+      // WAXING CRESCENT - Crescent from the RIGHT side (curved edge)
       tft.fillCircle(mx, my, r - 1, shadowColor);
-      // Srpek se vytváří průnikem dvou kruhů - jeden je střed měsíce, druhý je posunutý
+      // Crescent is created by intersecting two circles - one at center, one offset
       int offset = r / 3;
       for (int dy = -r; dy <= r; dy++) {
         int dx_max = sqrt(r*r - dy*dy);
-        // Hranice srpku je druhý kruh posunutý vpravo
+        // Crescent boundary is the second circle shifted right
         int light_boundary = sqrt(r*r - dy*dy - offset*offset) - offset;
         if (light_boundary < 0) light_boundary = 0;
         for (int dx = light_boundary; dx <= dx_max; dx++) {
@@ -331,7 +331,7 @@ void drawMoonPhaseIcon(int mx, int my, int r, int phase, uint16_t textColor, uin
     }
     
     case 2: {
-      // FIRST QUARTER - PRAVÁ polovina osvětlena
+      // FIRST QUARTER - Right half illuminated
       tft.fillCircle(mx, my, r - 1, shadowColor);
       for (int dy = -r; dy <= r; dy++) {
         int dx_max = sqrt(r*r - dy*dy);
@@ -343,13 +343,13 @@ void drawMoonPhaseIcon(int mx, int my, int r, int phase, uint16_t textColor, uin
     }
     
     case 3: {
-      // WAXING GIBBOUS - Skoro plný, srpek stínu zleva (křivá hranice)
+      // WAXING GIBBOUS - Almost full, shadow crescent from left (curved edge)
       tft.fillCircle(mx, my, r - 1, moonColor);
-      // Stín se vytváří průnikem dvou kruhů - jeden posunutý vlevo
+      // Shadow is created by intersecting two circles - one shifted left
       int offset = r / 3;
       for (int dy = -r; dy <= r; dy++) {
         int dx_max = sqrt(r*r - dy*dy);
-        // Hranice stínu je druhý kruh posunutý vlevo
+        // Shadow boundary is the second circle shifted left
         int shadow_boundary = -(sqrt(r*r - dy*dy - offset*offset) - offset);
         if (shadow_boundary > 0) shadow_boundary = 0;
         for (int dx = -dx_max; dx <= shadow_boundary; dx++) {
@@ -360,19 +360,19 @@ void drawMoonPhaseIcon(int mx, int my, int r, int phase, uint16_t textColor, uin
     }
     
     case 4: {
-      // FULL MOON - Zcela osvětlen
+      // FULL MOON - Fully illuminated
       tft.fillCircle(mx, my, r - 1, moonColor);
       break;
     }
     
     case 5: {
-      // WANING GIBBOUS - Skoro plný, srpek stínu zprava (křivá hranice)
+      // WANING GIBBOUS - Almost full, shadow crescent from right (curved edge)
       tft.fillCircle(mx, my, r - 1, moonColor);
-      // Stín se vytváří průnikem dvou kruhů - jeden posunutý vpravo
+      // Shadow is created by intersecting two circles - one shifted right
       int offset = r / 3;
       for (int dy = -r; dy <= r; dy++) {
         int dx_max = sqrt(r*r - dy*dy);
-        // Hranice stínu je druhý kruh posunutý vpravo
+        // Shadow boundary is the second circle shifted right
         int shadow_boundary = sqrt(r*r - dy*dy - offset*offset) - offset;
         if (shadow_boundary < 0) shadow_boundary = 0;
         for (int dx = shadow_boundary; dx <= dx_max; dx++) {
@@ -383,7 +383,7 @@ void drawMoonPhaseIcon(int mx, int my, int r, int phase, uint16_t textColor, uin
     }
     
     case 6: {
-      // LAST QUARTER - LEVÁ polovina osvětlena
+      // LAST QUARTER - Left half illuminated
       tft.fillCircle(mx, my, r - 1, shadowColor);
       for (int dy = -r; dy <= r; dy++) {
         int dx_max = sqrt(r*r - dy*dy);
@@ -395,13 +395,13 @@ void drawMoonPhaseIcon(int mx, int my, int r, int phase, uint16_t textColor, uin
     }
     
     case 7: {
-      // WANING CRESCENT - Srpek z LEVÉ strany (křivá hranice)
+      // WANING CRESCENT - Crescent from the LEFT side (curved edge)
       tft.fillCircle(mx, my, r - 1, shadowColor);
-      // Srpek se vytváří průnikem dvou kruhů - jeden je střed měsíce, druhý je posunutý
+      // Crescent is created by intersecting two circles - one at center, one offset
       int offset = r / 3;
       for (int dy = -r; dy <= r; dy++) {
         int dx_max = sqrt(r*r - dy*dy);
-        // Hranice srpku je druhý kruh posunutý vlevo
+        // Crescent boundary is the second circle shifted left
         int light_boundary = -(sqrt(r*r - dy*dy - offset*offset) - offset);
         if (light_boundary > 0) light_boundary = 0;
         for (int dx = -dx_max; dx <= light_boundary; dx++) {
@@ -422,10 +422,10 @@ void drawMoonPhaseIcon(int mx, int my, int r, int phase, uint16_t textColor, uin
 
 
 int getMoonPhase(int y, int m, int d) {
-  // Přesnější výpočet měsíční fáze
-  // Založeno na astronomickém algoritmu s přesností na dny
+  // More accurate moon phase calculation
+  // Based on an astronomical algorithm with day precision
   
-  // Výpočet Julian Date Number
+  // Calculate Julian Date Number
   if (m < 3) {
     y--;
     m += 12;
@@ -438,19 +438,19 @@ int getMoonPhase(int y, int m, int d) {
             (long)(30.6001 * (m + 1)) + 
             d + b - 1524;
   
-  // Výpočet fáze měsíce
-  // Referenční nov: 6. ledna 2000, 18:14 UTC (JD 2451550.26)
+  // Calculate moon phase
+  // Reference new moon: Jan 6, 2000, 18:14 UTC (JD 2451550.26)
   double daysSinceNew = jd - 2451550.1;
   
-  // Lunární cyklus je 29.53058867 dní
+  // Lunar cycle is 29.53058867 days
   double lunationCycle = 29.53058867;
   double currentLunation = daysSinceNew / lunationCycle;
   
-  // Získáme pozici v aktuálním cyklu (0.0 - 1.0)
+  // Get position in the current cycle (0.0 - 1.0)
   double phasePosition = currentLunation - floor(currentLunation);
   
-  // Konverze na 8 fází (0-7) s přesnými hranicemi
-  // Každá fáze zabírá 1/8 cyklu, hranice jsou uprostřed přechodů
+  // Convert to 8 phases (0-7) with accurate boundaries
+  // Each phase takes 1/8 of the cycle, boundaries are mid-transitions
   int phase;
   if (phasePosition < 0.0625) phase = 0;       // New Moon (0.000 - 0.062)
   else if (phasePosition < 0.1875) phase = 1;  // Waxing Crescent (0.062 - 0.188)
@@ -494,7 +494,7 @@ String countryToISO(String country) {
 
 String removeDiacritics(String input) {
   String output = input;
-  // Malá písmena
+  // Lowercase letters
   output.replace("á", "a"); output.replace("č", "c"); output.replace("ď", "d");
   output.replace("é", "e"); output.replace("ě", "e"); output.replace("í", "i");
   output.replace("ľ", "l"); output.replace("ĺ", "l"); output.replace("ň", "n");
@@ -502,7 +502,7 @@ String removeDiacritics(String input) {
   output.replace("š", "s"); output.replace("ť", "t"); output.replace("ú", "u");
   output.replace("ů", "u"); output.replace("ý", "y"); output.replace("ž", "z");
   
-  // Velká písmena
+  // Uppercase letters
   output.replace("Á", "A"); output.replace("Č", "C"); output.replace("Ď", "D");
   output.replace("É", "E"); output.replace("Ě", "E"); output.replace("Í", "I");
   output.replace("Ľ", "L"); output.replace("Ĺ", "L"); output.replace("Ň", "N");
@@ -574,7 +574,7 @@ String wifiSSIDs[MAX_NETWORKS];
 int wifiCount = 0, wifiOffset = 0;
 bool keyboardNumbers = false;
 bool keyboardShift = false;
-bool showPassword = false; // Výchozí stav: heslo je skryté (hvězdičky)
+bool showPassword = false; // Default state: password hidden (asterisks)
 
 const int TOUCH_X_MIN = 200;
 const int TOUCH_X_MAX = 3900;
@@ -757,22 +757,22 @@ const int COUNTRIES_COUNT = 10;
 uint16_t getBgColor() { 
   if (themeMode == 0) return isWhiteTheme ? TFT_WHITE : TFT_BLACK;
   if (themeMode == 1) return isWhiteTheme ? TFT_WHITE : TFT_BLACK;
-  if (themeMode == 2) return blueDark; // MODRÁ - tmavé pozadí
-  if (themeMode == 3) return yellowDark; // ŽLUTÁ - tmavé pozadí
+  if (themeMode == 2) return blueDark; // BLUE - dark background
+  if (themeMode == 3) return yellowDark; // YELLOW - dark background
   return TFT_BLACK;
 }
 
 uint16_t getTextColor() { 
   if (themeMode == 0) return isWhiteTheme ? TFT_BLACK : TFT_WHITE;
   if (themeMode == 1) return isWhiteTheme ? TFT_BLACK : TFT_WHITE;
-  if (themeMode == 2) return blueLight; // MODRÁ - světlý text
-  if (themeMode == 3) return yellowLight; // ŽLUTÁ - světlý text
+  if (themeMode == 2) return blueLight; // BLUE - light text
+  if (themeMode == 3) return yellowLight; // YELLOW - light text
   return TFT_WHITE;
 }
 
 uint16_t getSecHandColor() { 
-  if (themeMode == 2) return yellowLight;   // Sekundová ručička v modrém tématu = žlutá
-  if (themeMode == 3) return blueLight;     // Sekundová ručička v žlutém tématu = modrá
+  if (themeMode == 2) return yellowLight;   // Second hand in blue theme = yellow
+  if (themeMode == 3) return blueLight;     // Second hand in yellow theme = blue
   return isWhiteTheme ? TFT_RED : TFT_YELLOW; 
 }
 
@@ -783,14 +783,14 @@ void drawWifiIndicator() {
   tft.fillCircle(300, 20, 6, color);
 }
 
-// Ikona dostupné aktualizace (zelená šipka vedle WiFi)
+// Update available icon (green arrow next to WiFi)
 void drawUpdateIndicator() {
   if (!updateAvailable) return;
   
-  int iconX = 310;  // Vedle WiFi ikony
+  int iconX = 310;  // Next to the WiFi icon
   int iconY = 12;
   
-  // Zelená šipka dolů (download symbol)
+  // Green down arrow (download symbol)
   tft.fillTriangle(iconX, iconY + 8, iconX + 4, iconY, iconX + 8, iconY + 8, TFT_GREEN);
   tft.fillRect(iconX + 2, iconY + 8, 4, 6, TFT_GREEN);
   tft.fillRect(iconX, iconY + 14, 8, 2, TFT_GREEN);
@@ -948,11 +948,11 @@ bool lookupCountryGeonames(String countryName) {
 }
 
 // ============================================
-// OPRAVA 1: Získání Timezone z API (pro celý svět)
+// FIX 1: Get timezone from API (worldwide)
 // ============================================
 void detectTimezoneFromCoords(float lat, float lon, String countryHint) {
   if (WiFi.status() != WL_CONNECTED) {
-    // Fallback pokud není wifi, ale to by se při lookupu nemělo stát
+    // Fallback if WiFi is not available (should not happen during lookup)
     lookupTimezone = "Europe/Prague";
     lookupGmtOffset = 3600;
     lookupDstOffset = 3600;
@@ -962,7 +962,7 @@ void detectTimezoneFromCoords(float lat, float lon, String countryHint) {
   Serial.println("[TZ-AUTO] Detecting timezone from API for: " + String(lat,4) + ", " + String(lon,4));
   
   HTTPClient http;
-  // Použijeme Open-Meteo, které vrací "utc_offset_seconds" a "timezone"
+  // Use Open-Meteo which returns "utc_offset_seconds" and "timezone"
   String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(lat, 4) + "&longitude=" + String(lon, 4) + "&timezone=auto&daily=weather_code&foreground_days=1";
   
   http.setTimeout(8000);
@@ -971,23 +971,23 @@ void detectTimezoneFromCoords(float lat, float lon, String countryHint) {
   
   if (httpCode == 200) {
     String payload = http.getString();
-    DynamicJsonDocument doc(2048); // Zvětšený buffer
+    DynamicJsonDocument doc(2048); // Larger buffer
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error) {
-      // 1. Získat název zóny
+      // 1. Get timezone name
       if (doc.containsKey("timezone")) {
         lookupTimezone = doc["timezone"].as<String>();
       } else {
         lookupTimezone = "UTC";
       }
 
-      // 2. Získat offset v sekundách
+      // 2. Get offset in seconds
       if (doc.containsKey("utc_offset_seconds")) {
         int totalOffset = doc["utc_offset_seconds"].as<int>();
         
-        // Nastavíme GMT offset na aktuální posun a DST na 0 
-        // (protože API vrací už sečtený offset včetně letního času)
+        // Set GMT offset to current shift and DST to 0
+        // (API already returns the combined offset including DST)
         lookupGmtOffset = totalOffset;
         lookupDstOffset = 0; 
         
@@ -1003,7 +1003,7 @@ void detectTimezoneFromCoords(float lat, float lon, String countryHint) {
   }
   http.end();
 
-  // Fallback pokud API selže - alespoň zkusíme základní regiony podle hintu
+  // Fallback if API fails - at least try basic regions based on hint
   Serial.println("[TZ-AUTO] API Failed, using basic fallback");
   if (countryHint == "United Kingdom" || countryHint == "Ireland" || countryHint == "Portugal") {
      lookupTimezone = "Europe/London"; lookupGmtOffset = 0; lookupDstOffset = 3600;
@@ -1012,7 +1012,7 @@ void detectTimezoneFromCoords(float lat, float lon, String countryHint) {
   } else if (countryHint == "Japan") {
      lookupTimezone = "Asia/Tokyo"; lookupGmtOffset = 32400; lookupDstOffset = 0;
   } else if (countryHint.indexOf("America") >= 0 || countryHint == "Canada" || countryHint == "USA") {
-     // Hrubý odhad pro Ameriku pokud API selže
+    // Rough estimate for America if API fails
      lookupTimezone = "America/New_York"; lookupGmtOffset = -18000; lookupDstOffset = 3600;
   } else {
      lookupTimezone = "Europe/Prague"; lookupGmtOffset = 3600; lookupDstOffset = 3600;
@@ -1020,7 +1020,7 @@ void detectTimezoneFromCoords(float lat, float lon, String countryHint) {
 }
 
 // ============================================
-// OPRAVA 2: Ukládání do GLOBÁLNÍCH souřadnic
+// FIX 2: Save into GLOBAL coordinates
 // ============================================
 bool lookupCityNominatim(String cityName, String countryHint) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -1041,7 +1041,7 @@ bool lookupCityNominatim(String cityName, String countryHint) {
   Serial.println("[LOOKUP-CITY-NOM] URL " + url);
 
   http.begin(url);
-  http.addHeader("User-Agent", "ESP32-DataDisplay/1.0"); // Nominatim vyžaduje User-Agent
+  http.addHeader("User-Agent", "ESP32-DataDisplay/1.0"); // Nominatim requires a User-Agent
   int httpCode = http.GET();
   
   if (httpCode == 200) {
@@ -1060,13 +1060,13 @@ bool lookupCityNominatim(String cityName, String countryHint) {
         if (first["name"].is<const char*>() && first["lat"].is<const char*>() && first["lon"].is<const char*>()) {
           lookupCity = first["name"].as<String>();
           
-          // ZDE BYLA CHYBA: odstraněno "float" před lat/lon, aby se zapsalo do globálních proměnných
+          // BUG HERE: removed "float" before lat/lon so they write to global variables
           lat = atof(first["lat"].as<const char*>());
           lon = atof(first["lon"].as<const char*>());
           
           Serial.println("[LOOKUP-CITY-NOM] FOUND " + lookupCity + " Lat " + String(lat, 4) + ", Lon " + String(lon, 4));
           
-          // Zavoláme detekci zóny s nalezenými souřadnicemi
+          // Call timezone detection with the found coordinates
           detectTimezoneFromCoords(lat, lon, countryHint);
           
           Serial.println("[LOOKUP-CITY-NOM] Timezone set " + lookupTimezone);
@@ -1214,17 +1214,17 @@ void syncRegion() {
     DeserializationError error = deserializeJson(doc, http.getString());
     
     if (!error && doc["status"] == "success") {
-      // 1. Získat data z API do pomocných proměnných
+      // 1. Get data from API into helper variables
       String detectedCity = doc["city"].as<String>();
       String detectedTimezone = doc["timezone"].as<String>();
       
       Serial.println("[AUTO] Detected: " + detectedCity + ", TZ: " + detectedTimezone);
 
-      // 2. Nastavit globální 'selected' proměnné pro applyLocation
+      // 2. Set global 'selected' variables for applyLocation
       selectedCity = detectedCity;
       selectedTimezone = detectedTimezone;
       
-      // Detekce země a offsetů podle časové zóny
+      // Detect country and offsets based on timezone
       if (detectedTimezone.indexOf("Prague") >= 0) {
         selectedCountry = "Czech Republic";
         gmtOffset_sec = 3600; daylightOffset_sec = 3600;
@@ -1256,7 +1256,7 @@ void syncRegion() {
         selectedCountry = "Australia";
         gmtOffset_sec = 36000; daylightOffset_sec = 3600;
       } else {
-        // Fallback pokud neznáme zónu - necháme Czech Republic nebo stávající
+        // Fallback if timezone is unknown - keep Czech Republic or existing
         if (selectedCountry == "") {
            selectedCountry = "Czech Republic";
            gmtOffset_sec = 3600; daylightOffset_sec = 3600;
@@ -1265,7 +1265,7 @@ void syncRegion() {
       
       Serial.println("[AUTO] SelectedCountry set to: " + selectedCountry);
 
-      // 3. APLIKOVAT ZMĚNY (Uloží, nastaví čas a hlavně RESETUJE POČASÍ)
+      // 3. APPLY CHANGES (save, set time, and reset weather)
       applyLocation();
       
     } else {
@@ -1343,33 +1343,33 @@ void drawSettingsScreen()
   tft.setTextDatum(MC_DATUM);
   tft.drawString("SETTINGS", 160, 30, 4);
 
-  String menuItems[] = {"WiFi Setup", "Weather", "Regional", "Graphics", "Firmware"};  // PŘIDÁNO Firmware
-  uint16_t colors[] = {TFT_BLUE, TFT_BLUE, TFT_BLUE, TFT_BLUE, TFT_BLUE};  // Přidána 5. barva
+  String menuItems[] = {"WiFi Setup", "Weather", "Regional", "Graphics", "Firmware"};  // Added Firmware
+  uint16_t colors[] = {TFT_BLUE, TFT_BLUE, TFT_BLUE, TFT_BLUE, TFT_BLUE};  // Added 5th color
 
-  int totalItems = 5;  // ZMĚNĚNO z 4 na 5
-  int visibleItems = 4;  // Kolik se vejde na obrazovku najednou
+  int totalItems = 5;  // Changed from 4 to 5
+  int visibleItems = 4;  // How many fit on screen at once
 
   for (int i = 0; i < totalItems; i++) {
     if (i >= menuOffset && i < menuOffset + visibleItems) {
       int yPos = getMenuItemY(i - menuOffset);
       tft.drawRoundRect(40, yPos, 180, MENU_ITEM_HEIGHT, 6, colors[i]);
-      tft.drawRoundRect(39, yPos-1, 182, MENU_ITEM_HEIGHT+2, 6, colors[i]);  // Silný rámeček!
-      tft.fillRoundRect(41, yPos+1, 178, MENU_ITEM_HEIGHT-2, 5, getBgColor());  // Výplň
+      tft.drawRoundRect(39, yPos-1, 182, MENU_ITEM_HEIGHT+2, 6, colors[i]);  // Thick border
+      tft.fillRoundRect(41, yPos+1, 178, MENU_ITEM_HEIGHT-2, 5, getBgColor());  // Fill
       tft.drawString(menuItems[i], 130, yPos + 17, 2);
     }
   }
 
-  // Šipka nahoru (pokud nejsme na začátku)
+  // Up arrow (if not at the top)
   if (menuOffset > 0) {
     tft.drawRoundRect(230, 70, 50, 50, 4, TFT_BLUE);
     drawArrowUp(230, 70, TFT_BLUE);
   }
 
-  // Tlačítko ZPĚT
+  // Back button
   tft.drawRoundRect(230, 125, 50, 50, 4, TFT_RED);
   drawArrowBack(230, 125, TFT_RED);
 
-  // Šipka dolů (pokud je více než 4 položky)
+  // Down arrow (if there are more than 4 items)
   if (menuOffset < (totalItems - visibleItems)) {
     tft.drawRoundRect(230, 180, 50, 50, 4, TFT_BLUE);
     drawArrowDown(230, 180, TFT_BLUE);
@@ -1393,17 +1393,17 @@ void drawWeatherScreen() {
   tft.setTextColor(TFT_SKYBLUE, bg);
   tft.drawString(cityName == "" ? "Not set (Use Regional)" : cityName, 160, 100);
 
-  // ========== LEVÁ STRANA: TEMPERATURE ==========
+  // ========== LEFT SIDE: TEMPERATURE ==========
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextColor(txt, bg);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Temperature", 65, 130);  // Levá polovina
+  tft.drawString("Temperature", 65, 130);  // Left half
   
   int tempToggleX = 65;
   int tempToggleY = 150;
   
   if (!weatherUnitF) {
-    // °C je vybrán
+    // C selected
     tft.fillRoundRect(tempToggleX - 50, tempToggleY, 40, 25, 4, TFT_GREEN);
     tft.setTextColor(TFT_WHITE);
     tft.drawString("°C", tempToggleX - 30, tempToggleY + 8, 1);
@@ -1411,7 +1411,7 @@ void drawWeatherScreen() {
     tft.setTextColor(txt, bg);
     tft.drawString("°F", tempToggleX + 30, tempToggleY + 8, 1);
   } else {
-    // °F je vybrán
+    // F selected
     tft.drawRoundRect(tempToggleX - 50, tempToggleY, 40, 25, 4, TFT_BLUE);
     tft.setTextColor(txt, bg);
     tft.drawString("°C", tempToggleX - 30, tempToggleY + 8, 1);
@@ -1420,16 +1420,16 @@ void drawWeatherScreen() {
     tft.drawString("°F", tempToggleX + 30, tempToggleY + 8, 1);
   }
 
-  // ========== PRAVÁ STRANA: WIND SPEED ==========
+  // ========== RIGHT SIDE: WIND SPEED ==========
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextColor(txt, bg);
-  tft.drawString("Wind speed", 230, 130);  // Pravá polovina
+  tft.drawString("Wind speed", 230, 130);  // Right half
   
   int windToggleX = 230;
   int windToggleY = 150;
   
   if (!weatherUnitMph) {
-    // km/h je vybrán
+    // km/h selected
     tft.fillRoundRect(windToggleX - 55, windToggleY, 50, 25, 4, TFT_GREEN);
     tft.setTextColor(TFT_WHITE);
     tft.drawString("km/h", windToggleX - 30, windToggleY + 8, 1);
@@ -1437,7 +1437,7 @@ void drawWeatherScreen() {
     tft.setTextColor(txt, bg);
     tft.drawString("mph", windToggleX + 30, windToggleY + 8, 1);
   } else {
-    // mph je vybrán
+    // mph selected
     tft.drawRoundRect(windToggleX - 55, windToggleY, 50, 25, 4, TFT_BLUE);
     tft.setTextColor(txt, bg);
     tft.drawString("km/h", windToggleX - 30, windToggleY + 8, 1);
@@ -1642,13 +1642,13 @@ void drawCustomCityInput() {
   tft.setFreeFont(&FreeSansBold12pt7b);
   tft.drawString("Enter City Name", 160, 20);
 
-  // Input field - design shodný s WiFi
+  // Input field - same design as WiFi
   tft.drawRect(10, 40, 300, 30, isWhiteTheme ? TFT_BLACK : TFT_WHITE);
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextDatum(ML_DATUM);
   tft.drawString(customCityInput, 20, 55);
 
-  // Klávesnice - shodný design s WiFi
+  // Keyboard - same design as WiFi
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextDatum(MC_DATUM);
   
@@ -1664,7 +1664,7 @@ void drawCustomCityInput() {
     for (int i = 0; i < len; i++) {
       int btnX = i * 29 + 2;
       int btnY = 80 + r * 30;
-      // Použití menších čtverců a barev dle tématu (shodně s WiFi)
+      // Use smaller squares and theme colors (same as WiFi)
       tft.drawRect(btnX, btnY, 26, 26, isWhiteTheme ? TFT_DARKGREY : TFT_WHITE);
       char ch = rows[r][i];
       if (keyboardShift && !keyboardNumbers) ch = toupper(ch);
@@ -1672,12 +1672,12 @@ void drawCustomCityInput() {
     }
   }
 
-  // Mezerník
+  // Spacebar
   tft.drawRect(2, 170, 316, 25, isWhiteTheme ? TFT_DARKGREY : TFT_WHITE);
   tft.setTextDatum(MC_DATUM);
   tft.drawString("Space", 160, 183);
 
-  // Funkční tlačítka
+  // Function buttons
   int bw = 64; 
   int by = 198; 
   int bh = 35;
@@ -1695,17 +1695,17 @@ void drawCustomCityInput() {
   tft.drawRect(2 * bw + 2, by, bw - 4, bh, isWhiteTheme ? TFT_DARKGREY : TFT_WHITE);
   tft.drawString("Del", 2 * bw + bw / 2, by + 18);
   
-  // 4. LOOKUP (Zelené - specifické pro City)
+  // 4. LOOKUP (Green - specific to City)
   tft.setTextColor(TFT_GREEN);
   tft.drawRect(3 * bw + 2, by, bw - 4, bh, TFT_GREEN);
   tft.drawString("SRCH", 3 * bw + bw / 2, by + 18);
   
-  // 5. BACK (Červené/Oranžové - specifické pro City)
+  // 5. BACK (Red/Orange - specific to City)
   tft.setTextColor(TFT_ORANGE);
   tft.drawRect(4 * bw + 2, by, bw - 4, bh, TFT_ORANGE);
   tft.drawString("BACK", 4 * bw + bw / 2, by + 18);
   
-  tft.setTextColor(isWhiteTheme ? TFT_BLACK : TFT_WHITE); // Reset barvy
+  tft.setTextColor(isWhiteTheme ? TFT_BLACK : TFT_WHITE); // Reset colors
 }
 
 void drawCustomCountryInput() {
@@ -1715,13 +1715,13 @@ void drawCustomCountryInput() {
   tft.setFreeFont(&FreeSansBold12pt7b);
   tft.drawString("Enter Country Name", 160, 20);
 
-  // Input field - design shodný s WiFi
+  // Input field - same design as WiFi
   tft.drawRect(10, 40, 300, 30, isWhiteTheme ? TFT_BLACK : TFT_WHITE);
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextDatum(ML_DATUM);
   tft.drawString(customCountryInput, 20, 55);
 
-  // Klávesnice - shodný design s WiFi
+  // Keyboard - same design as WiFi
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextDatum(MC_DATUM);
   
@@ -1744,12 +1744,12 @@ void drawCustomCountryInput() {
     }
   }
 
-  // Mezerník
+  // Spacebar
   tft.drawRect(2, 170, 316, 25, isWhiteTheme ? TFT_DARKGREY : TFT_WHITE);
   tft.setTextDatum(MC_DATUM);
   tft.drawString("Space", 160, 183);
 
-  // Funkční tlačítka
+  // Function buttons
   int bw = 64; 
   int by = 198; 
   int bh = 35;
@@ -1767,17 +1767,17 @@ void drawCustomCountryInput() {
   tft.drawRect(2 * bw + 2, by, bw - 4, bh, isWhiteTheme ? TFT_DARKGREY : TFT_WHITE);
   tft.drawString("Del", 2 * bw + bw / 2, by + 18);
   
-  // 4. SEARCH (Zelené - specifické pro Country)
+  // 4. SEARCH (Green - specific to Country)
   tft.setTextColor(TFT_GREEN);
   tft.drawRect(3 * bw + 2, by, bw - 4, bh, TFT_GREEN);
   tft.drawString("SRCH", 3 * bw + bw / 2, by + 18);
   
-  // 5. BACK (Červené/Oranžové - specifické pro Country)
+  // 5. BACK (Red/Orange - specific to Country)
   tft.setTextColor(TFT_ORANGE);
   tft.drawRect(4 * bw + 2, by, bw - 4, bh, TFT_ORANGE);
   tft.drawString("BACK", 4 * bw + bw / 2, by + 18);
   
-  tft.setTextColor(isWhiteTheme ? TFT_BLACK : TFT_WHITE); // Reset barvy
+  tft.setTextColor(isWhiteTheme ? TFT_BLACK : TFT_WHITE); // Reset colors
 }
 
 // ================= FIRMWARE SETTINGS SCREEN =================
@@ -1788,12 +1788,12 @@ void drawFirmwareScreen() {
   if (themeMode == 2) fillGradientVertical(0, 0, 320, 240, blueDark, blueLight);
   else if (themeMode == 3) fillGradientVertical(0, 0, 320, 240, yellowDark, yellowLight);
   
-  // Nadpis
+  // Title
   tft.setTextColor(getTextColor());
   tft.setTextDatum(MC_DATUM);
   tft.drawString("FIRMWARE", 160, 30, 4);
   
-  // Nastavíme datum pro levý sloupec
+  // Set datum for the left column
   tft.setTextDatum(ML_DATUM);
   
   int yPos = 60;
@@ -1819,34 +1819,34 @@ void drawFirmwareScreen() {
   
   yPos += 35;
   
-  // Install mode nadpis
+  // Install mode title
   tft.setTextColor(getTextColor());
   tft.drawString("Install mode:", 10, yPos, 2);
   
-  yPos += 25;  // yPos je nyní 145
+  yPos += 25;  // yPos is now 145
   
-  // Radio buttons pro režim instalace (JEN Auto a By user)
+  // Radio buttons for install mode (only Auto and By user)
   const char* modes[2] = {"Auto", "By user"};
   for (int i = 0; i < 2; i++) {
     int btnY = yPos + (i * 25);  // 145, 170
     
-    // Radio button - kruh má střed na btnY
+    // Radio button - circle center is at btnY
     tft.drawCircle(20, btnY, 6, getTextColor());
     if (otaInstallMode == i) {
       tft.fillCircle(20, btnY, 4, TFT_GREEN);
     }
     
-    // Text - SPRÁVNĚ zarovnán s kruhem
-    // ML_DATUM = Middle Left, takže y je vertikální střed textu
-    // Kruh má střed na btnY, text má taky střed na btnY
+    // Text aligned with the circle
+    // ML_DATUM = Middle Left, so y is the vertical center of the text
+    // Circle center is at btnY, text center is also at btnY
     tft.setTextColor(getTextColor());
     tft.drawString(modes[i], 35, btnY, 2);
   }
   
-  // Reset text datum na centrování pro tlačítka
+  // Reset text datum to centered for buttons
   tft.setTextDatum(MC_DATUM);
   
-  // Tlačítko Check Now / Install
+  // Check Now / Install button
   int btnY = 190;
   if (updateAvailable) {
     tft.fillRoundRect(10, btnY, 140, 30, 5, TFT_GREEN);
@@ -1858,7 +1858,7 @@ void drawFirmwareScreen() {
     tft.drawString("CHECK NOW", 80, btnY + 15, 2);
   }
   
-  // Tlačítko ZPĚT (stejný styl jako ostatní menu)
+  // Back button (same style as other menus)
   tft.drawRoundRect(230, 125, 50, 50, 4, TFT_RED);
   drawArrowBack(230, 125, TFT_RED);
 }
@@ -1870,7 +1870,7 @@ void drawGraphicsScreen() {
   tft.setTextDatum(MC_DATUM);
   tft.drawString("GRAPHICS", 160, 30, 4);
   
-  // === TÉMATA ===
+  // === THEMES ===
   tft.drawString("Themes", 135, 50, 2);
 
   // BLACK Theme
@@ -1905,12 +1905,12 @@ void drawGraphicsScreen() {
   tft.drawString("YEL", 225, 78, 1);
   tft.setTextColor(getTextColor());
 
-  // === NOVÉ TLAČÍTKO INVERT ===
+  // === NEW INVERT BUTTON ===
   tft.setTextColor(getTextColor());
   tft.setTextDatum(MC_DATUM);
   tft.drawString("Colours", 285, 50, 2);
   
-  // INVERT tlačítko - stejný styl jako témata
+  // INVERT button - same style as themes
   uint16_t invertBorderColor = invertColors ? TFT_GREEN : TFT_DARKGREY;
   uint16_t invertFillColor = invertColors ? TFT_GREEN : TFT_DARKGREY;
   
@@ -1921,7 +1921,7 @@ void drawGraphicsScreen() {
   tft.drawString("INV", 285, 78, 1);
   tft.setTextColor(getTextColor());
 
-  // === SLIDER PRO JAS DISPLEJE (Zmenšený) ===
+  // === DISPLAY BRIGHTNESS SLIDER (Smaller) ===
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(getTextColor());
   tft.drawString("Brightness", 10, 108, 2);
@@ -1931,25 +1931,25 @@ void drawGraphicsScreen() {
   int sliderWidth = 130; 
   int sliderHeight = 12;
   
-  // Rámec slideru
+  // Slider frame
   tft.drawRect(sliderX, sliderY, sliderWidth, sliderHeight, getTextColor());
 
-  // Vyplnění podle aktuálního jasu
+  // Fill by current brightness
   int fillWidth = map(brightness, 0, 255, 0, sliderWidth - 2);
   tft.fillRect(sliderX + 1, sliderY + 1, fillWidth, sliderHeight - 2, TFT_SKYBLUE);
   
-  // Procenta - posunuta hned za zmenšený slider
+  // Percentage - moved right after the smaller slider
   int brightnessPercent = map(brightness, 0, 255, 0, 100);
   tft.setTextDatum(ML_DATUM);
   tft.drawString(String(brightnessPercent) + "%", sliderX + sliderWidth + 5, sliderY + 1, 1);
 
-  // === PŘEPÍNAČ ANALOG / DIGITAL (Vpravo od jasu) ===
+  // === ANALOG / DIGITAL TOGGLE (Right of brightness) ===
   int swX = 200; 
   int swY = 115; 
   int swW = 110; 
   int swH = 28;
 
-  // Barva aktivního prvku
+  // Active element color
   uint16_t activeColor = TFT_GREEN; 
   if(themeMode == 2) activeColor = blueLight;
   if(themeMode == 3) activeColor = yellowDark;
@@ -1957,7 +1957,7 @@ void drawGraphicsScreen() {
   tft.drawRect(swX, swY, swW, swH, getTextColor());
 
   if (!isDigitalClock) {
-    // Stav: ANALOG (aktivní vlevo)
+    // State: ANALOG (active on the left)
     tft.fillRect(swX + 2, swY + 2, (swW / 2) - 2, swH - 4, activeColor);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(TFT_WHITE);
@@ -1965,7 +1965,7 @@ void drawGraphicsScreen() {
     tft.setTextColor(getTextColor());
     tft.drawString("DIGI", swX + (3 * swW / 4), swY + (swH / 2), 2);
   } else {
-    // Stav: DIGITAL (aktivní vpravo)
+    // State: DIGITAL (active on the right)
     tft.fillRect(swX + (swW / 2), swY + 2, (swW / 2) - 2, swH - 4, activeColor);
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(getTextColor());
@@ -1974,12 +1974,12 @@ void drawGraphicsScreen() {
     tft.drawString("DIGI", swX + (3 * swW / 4), swY + (swH / 2), 2);
   }
 
-  // === AUTO DIM NASTAVENÍ ===
+  // === AUTO DIM SETTINGS ===
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(getTextColor());
   tft.drawString("Auto Dim", 10, 155, 2);
 
-  // ON/OFF TLAČÍTKA
+  // ON/OFF BUTTONS
   int onX = 10;
   int onY = 175;
   int offX = 10;
@@ -2004,7 +2004,7 @@ void drawGraphicsScreen() {
     tft.drawString("OFF", offX + btnWidth/2, offY + btnHeight/2, 1);
   }
 
-  // NASTAVENÍ VPRAVO OD ON/OFF
+  // SETTINGS TO THE RIGHT OF ON/OFF
   if (autoDimEnabled) {
     tft.setTextColor(getTextColor());
     tft.setTextDatum(ML_DATUM);
@@ -2012,7 +2012,7 @@ void drawGraphicsScreen() {
     int startX = 50;
     int startY = onY + 3;
     int lineHeight = 16;
-    // === START - ČAS ===
+    // === START - TIME ===
     tft.drawString("Start", startX, startY, 1);
     int startTimeX = startX + 50;
     tft.drawString(String(autoDimStart) + "h", startTimeX, startY, 1);
@@ -2033,7 +2033,7 @@ void drawGraphicsScreen() {
     tft.drawString("-", startMinusX + btnW/2, startMinusY + btnH/2, 1);
     tft.setTextColor(getTextColor());
 
-    // === END - ČAS ===
+    // === END - TIME ===
     int endY = startY + lineHeight;
     tft.setTextDatum(ML_DATUM);
     tft.drawString("End", startX, endY, 1);
@@ -2054,7 +2054,7 @@ void drawGraphicsScreen() {
     tft.drawString("-", endMinusX + btnW/2, endMinusY + btnH/2, 1);
     tft.setTextColor(getTextColor());
 
-    // === LEVEL - PROCENTA ===
+    // === LEVEL - PERCENT ===
     int levelY = endY + lineHeight;
     tft.setTextDatum(ML_DATUM);
     tft.drawString("Level", startX, levelY, 1);
@@ -2102,23 +2102,23 @@ void drawInitialSetup() {
       String txt = wifiSSIDs[i];
       if (txt.length() > 18) txt = txt.substring(0, 15) + "...";
       tft.drawString(txt, 15, 45 + idx * 30, 2);
-      // Linka oddělující položky
+      // Line separating items
       tft.drawFastHLine(10, 62 + idx * 30, 240, TFT_DARKGREY);
     }
   }
 
-  // Vykreslení navigačních šipek
-  // Šipka ZPĚT - pouze pokud už máme nějakou WiFi uloženou (nejsme v initial setupu bez dat)
+  // Draw navigation arrows
+  // Back arrow only if we already have saved WiFi (not in initial setup without data)
   if (ssid != "") {
     drawArrowBack(265, 50, TFT_RED);
   }
 
-  // Šipka NAHORU
+  // Up arrow
   if (wifiOffset > 0) {
     drawArrowUp(265, 110, TFT_BLUE);
   }
 
-  // Šipka DOLŮ
+  // Down arrow
   if (wifiOffset + 6 < wifiCount) {
     drawArrowDown(265, 170, TFT_BLUE);
   }
@@ -2138,7 +2138,7 @@ void drawKeyboardScreen() {
   tft.drawRect(10, 40, 300, 30, isWhiteTheme ? TFT_BLACK : TFT_WHITE);
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextDatum(ML_DATUM);
-  // LOGIKA ZOBRAZENÍ: Hvězdičky pouze pro WiFi a pouze pokud showPassword je false
+  // DISPLAY LOGIC: asterisks only for WiFi and only when showPassword is false
   if (currentState == KEYBOARD && !showPassword) {
     String stars = "";
     for (int i = 0; i < passwordBuffer.length(); i++) stars += "*";
@@ -2147,7 +2147,7 @@ void drawKeyboardScreen() {
     tft.drawString(passwordBuffer, 20, 55);
   }
 
-  // PŘEPÍNAČ VIDITELNOSTI (pouze pro WiFi klávesnici)
+  // VISIBILITY TOGGLE (only for WiFi keyboard)
   if (currentState == KEYBOARD) {
     tft.setTextDatum(MC_DATUM);
     tft.drawRect(250, 140, 60, 25, isWhiteTheme ? TFT_DARKGREY : TFT_WHITE);
@@ -2155,13 +2155,13 @@ void drawKeyboardScreen() {
     tft.drawString(showPassword ? "Hide" : "Show", 280, 153);
   }
 
-  // Klávesnice
+  // Keyboard
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextDatum(MC_DATUM);
   
    const char* rows[] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
   if (keyboardNumbers) {
-    // ČÍSELNÝ MÓD: 1. řádek čísla, 2. a 3. řádek speciální znaky
+    // NUMBER MODE: row 1 digits, rows 2 and 3 special characters
     rows[0] = "1234567890";
     rows[1] = "!@#$%^&*(/";
     rows[2] = ")-_+=.,?";
@@ -2179,7 +2179,7 @@ void drawKeyboardScreen() {
     }
   }
 
-  // Mezerník a funkční tlačítka (zbytek zůstává stejný)
+  // Spacebar and function buttons (rest stays the same)
   tft.drawRect(2, 170, 316, 25, isWhiteTheme ? TFT_DARKGREY : TFT_WHITE);
   tft.setTextDatum(MC_DATUM);
   tft.drawString("Space", 160, 183);
@@ -2202,7 +2202,7 @@ void drawKeyboardScreen() {
 }
 
 void updateKeyboardText() {
-  // Vymaže pouze vnitřek rámečku pro text, aby neblikal zbytek klávesnice
+  // Clear only the inner text area so the rest of the keyboard does not flicker
   tft.fillRect(11, 41, 298, 28, isWhiteTheme ? TFT_WHITE : TFT_BLACK);
   
   tft.setFreeFont(&FreeSans9pt7b);
@@ -2220,12 +2220,12 @@ void updateKeyboardText() {
 
 void drawClockStatic()
 {
-  if (isDigitalClock) return; // V digitálním módu nic nekreslíme
+  if (isDigitalClock) return; // In digital mode we draw nothing here
 
-  // Vykreslení minutových a hodinových index čárek
+  // Draw minute and hour tick marks
   for (int i = 0; i < 60; i++) {
     float ang = (i * 6 - 90) * DEGTORAD;
-    // Úprava u menšího ciferníku zkracujeme čárky
+    // For the smaller dial we shorten the tick marks
     int r1 = (i % 5 == 0) ? (radius - 10) : (radius - 5);
     uint16_t color;
     if (i % 5 == 0) {
@@ -2236,7 +2236,7 @@ void drawClockStatic()
     tft.drawLine(clockX + cos(ang) * radius, clockY + sin(ang) * radius, clockX + cos(ang) * r1, clockY + sin(ang) * r1, color);
   }
 
-  // Vykreslení čísel 1-12
+  // Draw numbers 1-12
   tft.setTextColor(getTextColor());
   tft.setTextDatum(MC_DATUM);
   tft.setFreeFont(&FreeSans9pt7b);
@@ -2252,7 +2252,7 @@ void drawClockStatic()
 
 void drawClockFace() {
   tft.fillScreen(getBgColor());
-  // V digitálním módu nekreslíme kruh ciferníku
+  // In digital mode we do not draw the dial circle
   if (!isDigitalClock) {
     tft.drawCircle(clockX, clockY, radius + 2, getTextColor());
     drawClockStatic();
@@ -2262,15 +2262,15 @@ void drawClockFace() {
 
 void drawDateAndWeek(const struct tm *ti)
 {
-  // NOVÁ LOGIKA BAREV PRO YELLOW TÉMA
+  // NEW COLOR LOGIC FOR YELLOW THEME
   uint16_t dateColor = getTextColor();
-  if (themeMode == 3) {  // YELLOW TÉMA - Text je ČERNÝ a TMAVÝ HNĚDÝ
-    dateColor = TFT_BLACK;  // Hlavní text - černý
+  if (themeMode == 3) {  // YELLOW THEME - text is black/dark brown
+    dateColor = TFT_BLACK;  // Main text - black
   }
   tft.setTextColor(dateColor, getBgColor());
   tft.setTextDatum(MC_DATUM);
   
-  // OPRAVA: Mazn pouze vpravo od cifernku x > 155, Výka od y160 do y240 (80 pixel)
+  // FIX: Clear only to the right of the dial x > 155, height y160 to y240 (80 px)
   tft.fillRect(155, 160, 165, 80, getBgColor());
 
   char dateBuf[30];
@@ -2288,9 +2288,9 @@ void drawDateAndWeek(const struct tm *ti)
   tft.drawString(weekStr, clockX, 193, 2);
 
   if (cityName != "") {
-    // YELLOW TÉMA - město tmavě zeleně
+    // YELLOW THEME - city in dark green
     if (themeMode == 3) {
-      tft.setTextColor(0x0220, getBgColor());  // Tmavě zelená
+      tft.setTextColor(0x0220, getBgColor());  // Dark green
     } else {
       tft.setTextColor(TFT_SKYBLUE, getBgColor());
     }
@@ -2299,8 +2299,8 @@ void drawDateAndWeek(const struct tm *ti)
 
   if (namedayValid && todayNameday != "--" && selectedCountry == "Czech Republic") {
     uint16_t namedayColor;
-    if (themeMode == 3) {  // YELLOW TÉMA - Svátek tmavě zeleně jako město
-      namedayColor = 0x0220;  // Tmavě zelená - stejné jako město v YELLOW
+    if (themeMode == 3) {  // YELLOW THEME - nameday in dark green like city
+      namedayColor = 0x0220;  // Dark green - same as city in YELLOW
     } else {
       namedayColor = isWhiteTheme ? TFT_DARKGREEN : TFT_ORANGE;
     }
@@ -2310,15 +2310,15 @@ void drawDateAndWeek(const struct tm *ti)
 }
 
 void drawDigitalClock(int h, int m, int s) {
-  // Barva textu se musí lišit od pozadí
+  // Text color must differ from background
   uint16_t clockColor = getTextColor();
   uint16_t bgColor = getBgColor();
 
-  // Pro lepší čitelnost v barevných tématech
+  // For better readability in colored themes
   if (themeMode == 2) clockColor = TFT_WHITE; 
   if (themeMode == 3) clockColor = TFT_BLACK;
 
-  // Formátování hodin
+  // Time formatting
   int displayH = h;
   String suffix = "";
   
@@ -2332,21 +2332,21 @@ void drawDigitalClock(int h, int m, int s) {
 
   tft.setTextDatum(MC_DATUM);
   
-  // Smazání předchozího času (box s barvou pozadí)
-  // Používáme clockX a clockY jako střed (stejné jako analog)
+  // Clear previous time (box with background color)
+  // Use clockX and clockY as center (same as analog)
   // Box: w=160, h=60
   
-  // Pokud je aktivní gradient (theme 2 a 3), mazání rectem udělá "díru".
-  // Nejlepší řešení pro text na gradientu bez flicker free knihovny je
-  // nastavit pozadí textu na barvu, která tam cca je, nebo jen přepisovat.
-  // Zde použijeme barvu pozadí (pro flat themes ok, pro gradient to bude vidět, ale je to funkční)
+  // If a gradient is active (themes 2 and 3), clearing with a rect makes a "hole".
+  // Best option for text on gradient without flicker-free library is
+  // to set text background to an approximate color or just overwrite.
+  // Here we use the background color (ok for flat themes, visible on gradient but works)
   tft.setTextColor(clockColor, bgColor); 
   
-  // Velký čas (použijeme font 7 pokud je, jinak 6. Font 7 je 7-segment)
-  // V CYD knihovnách bývá font 7 (7-seg)
+  // Large time (use font 7 if available, otherwise 6; font 7 is 7-seg)
+  // CYD libraries usually have font 7 (7-seg)
   tft.drawString(timeStr, clockX, clockY, 7); 
 
-  // Sekundy a suffix pod tím
+  // Seconds and suffix below
   char secStr[10];
   if (is12hFormat) {
      sprintf(secStr, ":%02d%s", s, suffix.c_str());
@@ -2355,30 +2355,30 @@ void drawDigitalClock(int h, int m, int s) {
   }
   
   tft.setTextColor(getSecHandColor(), bgColor);
-  tft.drawString(secStr, clockX, clockY + 45, 4); // Menší font pod časem
+  tft.drawString(secStr, clockX, clockY + 45, 4); // Smaller font below time
 }
 
 void updateHands(int h, int m, int s) {
-  // Pokud je zapnutý digitální režim, kreslíme digitálně
+  // If digital mode is enabled, draw digital
   if (isDigitalClock) {
     drawDigitalClock(h, m, s);
     return;
   }
 
-  // --- PŮVODNÍ ANALOGOVÝ KÓD ---
+  // --- ORIGINAL ANALOG CODE ---
   uint16_t bgColor = getBgColor();
   uint16_t mainHandColor = getTextColor();
   uint16_t secColor = getSecHandColor();
 
-  // SMAZÁNÍ STARÝCH RUČEK (pokud existují)
+  // CLEAR OLD HANDS (if they exist)
   if (lastSec != -1) {
     float hO = (lastHour % 12) + (lastMin / 60.0f);
-    hO = hO * 30 - 90;  // Převod do stupňů
+    hO = hO * 30 - 90;  // Convert to degrees
     
     float mO = lastMin * 6 - 90;
     float sO = lastSec * 6 - 90;
 
-    // Kreslení starých ruček barvou pozadí (smazání)
+    // Draw old hands in background color (erase)
     tft.drawLine(clockX, clockY,
                  clockX + cos(hO * DEGTORAD) * (radius - 35),
                  clockY + sin(hO * DEGTORAD) * (radius - 35),
@@ -2391,11 +2391,11 @@ void updateHands(int h, int m, int s) {
                  clockX + cos(sO * DEGTORAD) * (radius - 14),
                  clockY + sin(sO * DEGTORAD) * (radius - 14),
                  bgColor);
-    // DŮLEŽITÉ: Znovu nakreslit indexy!
+    // IMPORTANT: redraw tick marks
     drawClockStatic();
   }
 
-  // KRESLENÍ NOVÝCH RUČEK
+  // DRAW NEW HANDS
   float hA = (h % 12) + (m / 60.0f);
   hA = hA * 30 - 90;
   
@@ -2414,21 +2414,21 @@ void updateHands(int h, int m, int s) {
                clockX + cos(sA * DEGTORAD) * (radius - 14),
                clockY + sin(sA * DEGTORAD) * (radius - 14),
                secColor);
-  // Středový kroužek
+  // Center circle
   tft.fillCircle(clockX, clockY, 3, TFT_LIGHTGREY);
 }
 
 // ============================================
-// OPRAVA 3: Ukládání a načítání souřadnic
+// FIX 3: Save and load coordinates
 // ============================================
 void applyLocation() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   
-  // RESET SOUŘADNIC - při vyberu ze seznamu musíme nechat fetchWeatherData() najít nové souřadnice
+  // RESET COORDINATES - when selecting from list, let fetchWeatherData() find new coords
   lat = 0.0;
   lon = 0.0;
   
-  // Uložení do preferencí
+  // Save to preferences
   prefs.begin("sys", false);
   prefs.putString("city", selectedCity);
   prefs.putString("country", selectedCountry);
@@ -2436,17 +2436,17 @@ void applyLocation() {
   prefs.putInt("gmt", gmtOffset_sec);
   prefs.putInt("dst", daylightOffset_sec);
   
-  // UKLÁDÁME I SOUŘADNICE (nyní 0.0, aby se při dalším update počasí našly správné)
+  // SAVE COORDINATES TOO (now 0.0 so next weather update finds correct ones)
   prefs.putFloat("lat", lat);
   prefs.putFloat("lon", lon);
   
   prefs.end();
   cityName = selectedCity;
   
-  lastDay = -1; // Vynutí update data
-  lastWeatherUpdate = 0; // Vynutí update počasí
-  lastNamedayDay = -1; // OPRAVA: Vynutí update svátku při změně lokace
-  handleNamedayUpdate(); // OPRAVA: Aktualizace svátku ihned po změně lokace
+  lastDay = -1; // Force date update
+  lastWeatherUpdate = 0; // Force weather update
+  lastNamedayDay = -1; // FIX: Force nameday update on location change
+  handleNamedayUpdate(); // FIX: Update nameday immediately after location change
 }
 
 void loadSavedLocation() {
@@ -2456,11 +2456,11 @@ void loadSavedLocation() {
   String savedCity = prefs.getString("city", "");
   selectedTimezone = prefs.getString("timezone", "");
   
-  // OPRAVA: Sjednocení názvů klíčů s funkcí applyLocation ("gmt" místo "gmtOffset")
+  // FIX: Align key names with applyLocation ("gmt" instead of "gmtOffset")
   gmtOffset_sec = prefs.getInt("gmt", 3600);
   daylightOffset_sec = prefs.getInt("dst", 3600);
   
-  // NAČTEME ULOŽENÉ SOUŘADNICE
+  // Load saved coordinates
   lat = prefs.getFloat("lat", 0.0);
   lon = prefs.getFloat("lon", 0.0);
   
@@ -2501,21 +2501,21 @@ String getWindDir(int deg) {
 }
 
 // ============================================
-// OPRAVA 4: Použití přesných souřadnic pro počasí
+// FIX 4: Use precise coordinates for weather
 // ============================================
 void fetchWeatherData() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
   
-  // KROK 1: Získání souřadnic
-  // Pokud už máme souřadnice z Custom Lookup (nejsou 0.0), POUŽIJEME JE a nehledáme znovu
+  // STEP 1: Get coordinates
+  // If we already have coordinates from Custom Lookup (not 0.0), USE them and do not search again
   if (lat != 0.0 && lon != 0.0) {
      Serial.println("[WEATHER] Using saved coordinates: " + String(lat, 4) + ", " + String(lon, 4));
   } 
   else {
-    // Pokud nemáme souřadnice (např. vybráno ze seznamu embedded měst), musíme je najít
-    // Ale hledáme chytřeji - stahneme vice vysledku a filtrujeme zemi
+    // If we do not have coordinates (e.g. selected from embedded list), we must find them
+    // But we search smarter - fetch more results and filter by country
     Serial.println("[WEATHER] Searching coordinates for: " + weatherCity + ", Country: " + selectedCountry);
     
     String searchName = weatherCity;
@@ -2533,12 +2533,12 @@ void fetchWeatherData() {
       
       bool found = false;
       if (doc["results"].size() > 0) {
-        // Projdeme výsledky a zkusíme najít shodu země
+        // Walk results and try to match country
         for (JsonVariant result : doc["results"].as<JsonArray>()) {
            String resCountry = result["country"].as<String>();
            String resCode = result["country_code"].as<String>();
            
-           // Porovnáme zemi (fuzzy match)
+           // Compare country (fuzzy match)
            if (resCountry.indexOf(selectedCountry) >= 0 || selectedCountry.indexOf(resCountry) >= 0 || 
                resCode.equalsIgnoreCase(selectedCountry)) {
                
@@ -2550,14 +2550,14 @@ void fetchWeatherData() {
            }
         }
         
-        // Pokud jsme nenašli shodu země, vezmeme první výsledek (fallback)
+        // If no country match, take the first result (fallback)
         if (!found) {
            lat = doc["results"][0]["latitude"];
            lon = doc["results"][0]["longitude"];
            Serial.println("[WEATHER] Country match failed, taking first result: " + doc["results"][0]["country"].as<String>());
         }
         
-        // Uložíme nové souřadnice, abychom příště nemuseli hledat
+        // Save new coordinates so we do not search next time
         prefs.begin("sys", false);
         prefs.putFloat("lat", lat);
         prefs.putFloat("lon", lon);
@@ -2567,7 +2567,7 @@ void fetchWeatherData() {
     http.end();
   }
 
-  // KROK 2: Stažení počasí pro dané souřadnice
+  // STEP 2: Download weather for the given coordinates
   time_t now = time(nullptr);
   struct tm *timeinfo = localtime(&now);
 
@@ -2588,7 +2588,7 @@ void fetchWeatherData() {
 
   if (httpCode == 200) {
     String payload = http.getString();
-    DynamicJsonDocument doc(8192); // Větší buffer pro weather data
+    DynamicJsonDocument doc(8192); // Larger buffer for weather data
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error) {
@@ -2635,11 +2635,11 @@ void fetchWeatherData() {
   http.end();
 }
 
-// ========== GRADIENTNÍ VÝPLŇ ==========
+// ========== GRADIENT FILL ==========
 void fillGradientVertical(int x, int y, int w, int h, uint16_t colorTop, uint16_t colorBottom) {
-  // Vykreslí gradient vertikálně (od horní barvy k dolní)
+  // Draw gradient vertically (from top color to bottom color)
   for (int i = 0; i < h; i++) {
-    // Interpolace mezi barvami (R,G,B)
+    // Interpolation between colors (R,G,B)
     uint8_t r1 = (colorTop >> 11) & 0x1F;
     uint8_t g1 = (colorTop >> 5) & 0x3F;
     uint8_t b1 = colorTop & 0x1F;
@@ -2663,16 +2663,16 @@ void drawWeatherSection() {
   uint16_t txt = getTextColor();
   uint16_t txtContrast = TFT_SKYBLUE;
 
-  if (themeMode == 2) {                           // MODRÝ - text žlutý
+  if (themeMode == 2) {                           // BLUE - yellow text
     txtContrast = TFT_YELLOW;
-  } else if (themeMode == 3) {                     // ŽLUTÝ - text černý
+  } else if (themeMode == 3) {                     // YELLOW - black text
     txtContrast = TFT_BLACK;
   }
 
-  // Vymazání sekce - POUZE počasí, ne hodiny
-  tft.fillRect(0, 0, 155, 95, bg);                 // Horní část
-  tft.fillRect(0, 105, 155, 100, bg);              // Středová část
-  tft.fillRect(0, 206, 155, 34, bg);               // Dolní část
+  // Clear section - ONLY weather, not the clock
+  tft.fillRect(0, 0, 155, 95, bg);                 // Top part
+  tft.fillRect(0, 105, 155, 100, bg);              // Middle part
+  tft.fillRect(0, 206, 155, 34, bg);               // Bottom part
 
   if (!initialWeatherFetched) {
     tft.setTextColor(txt, bg);
@@ -2681,7 +2681,7 @@ void drawWeatherSection() {
     return;
   }
 
-  // --- 1. SEKCE: Aktuální teplota s ikonou ---
+  // --- SECTION 1: Current temperature with icon ---
   drawWeatherIconVector(weatherCode, 5, 15);
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(txtContrast, bg);
@@ -2693,21 +2693,21 @@ void drawWeatherSection() {
   tft.drawString(tempStr, 45, 15);
 
   int tempWidth = tft.textWidth(tempStr);
-  drawDegreeCircle(45 + tempWidth + 5, 20, 3, txtContrast);  // ✅ r=3 - větší kroužek
+  drawDegreeCircle(45 + tempWidth + 5, 20, 3, txtContrast);  // r=3 - larger circle
   tft.drawString(unit, 45 + tempWidth + 12, 15);
 
-  // Popis počasí: Clear, Cloudy, Rainy, atd.
+  // Weather description: Clear, Cloudy, Rainy, etc.
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextColor(txt, bg);
   tft.drawString(getWeatherDesc(weatherCode), 45, 48);
 
-  // Vlhkost a tlak
+  // Humidity and pressure
   tft.setFreeFont(NULL);
   tft.setTextColor(txt, bg);
   tft.setCursor(5, 75);
  tft.printf("Hum: %d%% Press: %d hPa", currentHumidity, currentPressure);
 
-  // Vítr na dalším řádku
+  // Wind on the next line
   tft.setCursor(5, 88);
   if (weatherUnitMph) {
   float windMph = currentWindSpeed * 0.621371;
@@ -2727,17 +2727,17 @@ void drawWeatherSection() {
   tft.setTextColor(TFT_RED, bg);
   tft.print(sunsetTime);
 
-  // ODDLOVACÍ LINKA
+  // SEPARATOR LINE
   tft.setTextColor(txt, bg);
   tft.drawFastHLine(5, 120, 145, TFT_DARKGREY);
 
-  // --- 2. SEKCE: Předpověď s DNEM ---
+  // --- SECTION 2: Forecast with day ---
   tft.setTextColor(txt, bg);
   tft.setFreeFont(NULL);
   tft.drawString("Forecast:", 5, 128);
 
   // ============================================
-  // PRVNÍ DEN - VYKRESLENÍ S KROUZKEM JAKO °
+  // FIRST DAY - RENDER WITH CIRCLE AS DEGREE
   // ============================================
   drawWeatherIconVectorSmall(forecast[0].code, 8, 138);
   tft.setTextDatum(ML_DATUM);
@@ -2747,28 +2747,28 @@ void drawWeatherSection() {
   int day1y = 138;
   tft.drawString(forecastDay1Name, day1x, day1y);
 
-  // ✅ OPRAVA: Vykreslení bez textového °, ale s krouzkem funkcí
+  // FIX: Render without text degree symbol, using the circle function
   tft.setTextColor(txtContrast, bg);
   String tempMin1 = String((int)forecast[0].tempMin);
   String tempMax1 = String((int)forecast[0].tempMax);
   
-  // Vykreslení teploty s LOMÍTKEM místo pomlčky
+  // Render temperature with a slash instead of a dash
   String tempRangeOnly1 = tempMin1 + "/" + tempMax1;
   tft.drawString(tempRangeOnly1, day1x, day1y + 13);
   
-  // Výpočet pozice pro kroulek (stupень symbol)
+  // Compute position for the degree circle
   int tempWidth1 = tft.textWidth(tempRangeOnly1);
   int degreeX1 = day1x + tempWidth1 + 3;
   int degreeY1 = day1y + 8;
   
-  // Vykreslení malého krouzku jako stupně (r=1)
+  // Draw a small circle as degree (r=1)
   drawDegreeCircle(degreeX1, degreeY1, 1, txtContrast);
   
-  // Vykreslení jednotky (C/F) za kruhem
+  // Draw unit (C/F) after the circle
   tft.drawString(unit, degreeX1 + 4, day1y + 13);
 
   // ============================================
-  // DRUHÝ DEN - VYKRESLENÍ S KROUZKEM JAKO °
+  // SECOND DAY - RENDER WITH CIRCLE AS DEGREE
   // ============================================
   drawWeatherIconVectorSmall(forecast[1].code, 8, 170);
   tft.setTextColor(txt, bg);
@@ -2776,32 +2776,32 @@ void drawWeatherSection() {
   int day2y = 170;
   tft.drawString(forecastDay2Name, day2x, day2y);
 
-  // ✅ OPRAVA: Vykreslení bez textového °, ale s krouzkem funkcí
+  // FIX: Render without text degree symbol, using the circle function
   tft.setTextColor(txtContrast, bg);
   String tempMin2 = String((int)forecast[1].tempMin);
   String tempMax2 = String((int)forecast[1].tempMax);
   
-  // Vykreslení teploty s LOMÍTKEM místo pomlčky
+  // Render temperature with a slash instead of a dash
   String tempRangeOnly2 = tempMin2 + "/" + tempMax2;
   tft.drawString(tempRangeOnly2, day2x, day2y + 13);
   
-  // Výpočet pozice pro kroulek (stupень symbol)
+  // Compute position for the degree circle
   int tempWidth2 = tft.textWidth(tempRangeOnly2);
   int degreeX2 = day2x + tempWidth2 + 3;
   int degreeY2 = day2y + 8;
   
-  // Vykreslení malého krouzku jako stupně (r=1)
+  // Draw a small circle as degree (r=1)
   drawDegreeCircle(degreeX2, degreeY2, 1, txtContrast);
   
-// ODDĚLUJÍCÍ LINKA
+// SEPARATOR LINE
   tft.setTextColor(txt, bg);
   tft.drawFastHLine(5, 200, 145, TFT_DARKGREY);
 
-// --- 3. SEKCE: Měsíční fáze s SPRÁVNOU GRAFIKOU ---
+// --- SECTION 3: Moon phase with correct graphics ---
   struct tm ti;
   if (getLocalTime(&ti)) {
     int phase = getMoonPhase(ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
-    moonPhaseVal = phase;  // Aktualizace globální proměnné
+    moonPhaseVal = phase;  // Update global variable
     
     tft.setTextColor(txt, bg);
     tft.setFreeFont(NULL);
@@ -2812,10 +2812,10 @@ void drawWeatherSection() {
       tft.drawString(phaseNames[phase], 5, 222);
     }
 
-    // Volání správné funkce pro kreslení měsíční fáze
-    int mx = 120;       // X pozice měsíce
-    int my = 222;       // Y pozice měsíce
-    int r = 13;         // Radius měsíce
+    // Call the correct function to draw the moon phase
+    int mx = 120;       // Moon X position
+    int my = 222;       // Moon Y position
+    int r = 13;         // Moon radius
     
     drawMoonPhaseIcon(mx, my, r, phase, txt, bg);
     
@@ -2833,7 +2833,7 @@ void drawWeatherSection() {
 
 
 // ============================================
-// POMOCNÁ FUNKCE PRO KRESLENÍ STUPNĚ
+// HELPER FUNCTION FOR DRAWING DEGREE CIRCLE
 // ============================================
 void drawDegreeCircle(int x, int y, int r, uint16_t color) {
   tft.drawCircle(x, y, r, color);
@@ -2843,7 +2843,7 @@ void drawDegreeCircle(int x, int y, int r, uint16_t color) {
 }
 
 
-// ================= AUTODIM HELPER FUNKCE =================
+// ================= AUTODIM HELPER FUNCTION =================
 void applyAutoDim() {
   if (!autoDimEnabled) return;
 
@@ -2853,21 +2853,21 @@ void applyAutoDim() {
 
   bool shouldDim = false;
   if (autoDimStart < autoDimEnd) {
-    // Normální interval (např. 22-6 není normální, to je přes půlnoc)
+    // Normal interval (e.g. 22-6 is not normal, that's across midnight)
     shouldDim = (currentHour >= autoDimStart && currentHour < autoDimEnd);
   } else {
-    // Interval přes půlnoc (např. start=22, end=6)
+    // Interval across midnight (e.g. start=22, end=6)
     shouldDim = (currentHour >= autoDimStart || currentHour < autoDimEnd);
   }
 
   if (shouldDim && !isDimmed) {
-    // Přejít na nižší jas
+    // Switch to lower brightness
     brightness = map(autoDimLevel, 0, 100, 0, 255);
     isDimmed = true;
     analogWrite(LCD_BL_PIN, brightness);
     Serial.println("[AUTODIM] Dim ON - level: " + String(brightness));
   } else if (!shouldDim && isDimmed) {
-    // Vrátit na full jas
+    // Return to full brightness
     brightness = 255;
     isDimmed = false;
     analogWrite(LCD_BL_PIN, brightness);
@@ -2876,20 +2876,20 @@ void applyAutoDim() {
 }
 
 
-// ================= SUNRISE/SUNSET IKONY =================
+// ================= SUNRISE/SUNSET ICONS =================
 void drawSunriseIcon(int x, int y, uint16_t color) {
-  // Minimalistická ikona východu (slunce nad čárou s vlnkou)
-  // Slunce
+  // Minimalist sunrise icon (sun above line with wave)
+  // Sun
   tft.fillCircle(x + 8, y + 2, 4, color);
-  // Paprsky
-  tft.drawLine(x + 8, y - 3, x + 8, y - 5, color);     // vrch
-  tft.drawLine(x + 8, y + 7, x + 8, y + 9, color);     // spod
-  tft.drawLine(x + 3, y + 2, x + 1, y + 2, color);     // vlevo
-  tft.drawLine(x + 13, y + 2, x + 15, y + 2, color);   // vpravo
-  tft.drawLine(x + 5, y - 1, x + 3, y - 3, color);     // levý horní
-  tft.drawLine(x + 11, y - 1, x + 13, y - 3, color);   // pravý horní
+  // Rays
+  tft.drawLine(x + 8, y - 3, x + 8, y - 5, color);     // top
+  tft.drawLine(x + 8, y + 7, x + 8, y + 9, color);     // bottom
+  tft.drawLine(x + 3, y + 2, x + 1, y + 2, color);     // left
+  tft.drawLine(x + 13, y + 2, x + 15, y + 2, color);   // right
+  tft.drawLine(x + 5, y - 1, x + 3, y - 3, color);     // upper left
+  tft.drawLine(x + 11, y - 1, x + 13, y - 3, color);   // upper right
 
-  // Vlnka pod sluncem
+  // Wave below the sun
   tft.drawLine(x + 2, y + 10, x + 6, y + 10, color);
   tft.drawLine(x + 10, y + 10, x + 14, y + 10, color);
   tft.drawLine(x + 4, y + 11, x + 5, y + 12, color);
@@ -2898,37 +2898,37 @@ void drawSunriseIcon(int x, int y, uint16_t color) {
 }
 
 void drawSunsetIcon(int x, int y, uint16_t color) {
-  // Minimalistická ikona západu (slunce pod čárou s vlnkou)
-  // Vlnka nad sluncem
+  // Minimalist sunset icon (sun below line with wave)
+  // Wave above the sun
   tft.drawLine(x + 2, y, x + 6, y, color);
   tft.drawLine(x + 10, y, x + 14, y, color);
   tft.drawLine(x + 4, y - 1, x + 5, y - 2, color);
   tft.drawLine(x + 11, y - 1, x + 12, y - 2, color);
   tft.drawLine(x + 6, y - 1, x + 10, y - 1, color);
 
-  // Slunce
+  // Sun
   tft.fillCircle(x + 8, y + 10, 4, color);
-  // Paprsky
-  tft.drawLine(x + 8, y + 5, x + 8, y + 3, color);     // vrch
-  tft.drawLine(x + 8, y + 17, x + 8, y + 19, color);   // spod
-  tft.drawLine(x + 3, y + 10, x + 1, y + 10, color);   // vlevo
-  tft.drawLine(x + 13, y + 10, x + 15, y + 10, color); // vpravo
-  tft.drawLine(x + 5, y + 9, x + 3, y + 7, color);     // levý horní
-  tft.drawLine(x + 11, y + 9, x + 13, y + 7, color);   // pravý horní
+  // Rays
+  tft.drawLine(x + 8, y + 5, x + 8, y + 3, color);     // top
+  tft.drawLine(x + 8, y + 17, x + 8, y + 19, color);   // bottom
+  tft.drawLine(x + 3, y + 10, x + 1, y + 10, color);   // left
+  tft.drawLine(x + 13, y + 10, x + 15, y + 10, color); // right
+  tft.drawLine(x + 5, y + 9, x + 3, y + 7, color);     // upper left
+  tft.drawLine(x + 11, y + 9, x + 13, y + 7, color);   // upper right
 }
 
 // ================= OTA UPDATE FUNCTIONS =================
 
-// Porovnání verzí (vrací true pokud newVer > currentVer)
+// Version comparison (returns true if newVer > currentVer)
 bool isNewerVersion(String currentVer, String newVer) {
-  // Odstraníme "v" prefix pokud existuje
+  // Remove "v" prefix if present
   currentVer.replace("v", "");
   newVer.replace("v", "");
   
   int currMajor = 0, currMinor = 0, currPatch = 0;
   int newMajor = 0, newMinor = 0, newPatch = 0;
   
-  // Parse current version (podporuje formát X.Y.Z)
+  // Parse current version (supports format X.Y.Z)
   int firstDot = currentVer.indexOf('.');
   if (firstDot > 0) {
     currMajor = currentVer.substring(0, firstDot).toInt();
@@ -2941,7 +2941,7 @@ bool isNewerVersion(String currentVer, String newVer) {
     }
   }
   
-  // Parse new version (podporuje formát X.Y.Z)
+  // Parse new version (supports format X.Y.Z)
   firstDot = newVer.indexOf('.');
   if (firstDot > 0) {
     newMajor = newVer.substring(0, firstDot).toInt();
@@ -2959,14 +2959,14 @@ bool isNewerVersion(String currentVer, String newVer) {
   Serial.print(" vs ");
   Serial.print(newMajor); Serial.print("."); Serial.print(newMinor); Serial.print("."); Serial.println(newPatch);
   
-  // Porovnání verzí
+  // Compare versions
   if (newMajor > currMajor) return true;
   if (newMajor == currMajor && newMinor > currMinor) return true;
   if (newMajor == currMajor && newMinor == currMinor && newPatch > currPatch) return true;
   return false;
 }
 
-// Kontrola dostupné verze na GitHubu
+// Check available version on GitHub
 void checkForUpdate() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[OTA] WiFi not connected");
@@ -2976,7 +2976,7 @@ void checkForUpdate() {
   Serial.println("[OTA] Checking for updates...");
   HTTPClient http;
   
-  // OPRAVA: Povolit redirecty i pro kontrolu verze (pro jistotu)
+  // FIX: Allow redirects for version check (just in case)
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   
   http.begin(VERSION_CHECK_URL);
@@ -2994,7 +2994,7 @@ void checkForUpdate() {
     
     if (!error) {
       availableVersion = doc["version"].as<String>();
-      downloadURL = doc["download_url"].as<String>();  // NOVÉ: Načtení download URL
+      downloadURL = doc["download_url"].as<String>();  // NEW: Load download URL
       
       Serial.print("[OTA] Current: ");
       Serial.print(FIRMWARE_VERSION);
@@ -3021,7 +3021,7 @@ void checkForUpdate() {
   lastVersionCheck = millis();
 }
 
-// Stažení a instalace firmware
+// Download and install firmware
 void performOTAUpdate() {
   if (!updateAvailable) {
     Serial.println("[OTA] No update available");
@@ -3032,13 +3032,13 @@ void performOTAUpdate() {
   updateProgress = 0;
   updateStatus = "Connecting...";
   
-  // Zobrazíme progress screen
+  // Show progress screen
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE);
   tft.setTextDatum(MC_DATUM);
   tft.drawString("FIRMWARE UPDATE", 160, 30, 2);
   
-  // Kontrola, zda máme download URL
+  // Check if we have a download URL
   if (downloadURL == "") {
     Serial.println("[OTA] ✗ No download URL available!");
     tft.fillScreen(TFT_BLACK);
@@ -3053,20 +3053,20 @@ void performOTAUpdate() {
     return;
   }
   
-  String firmwareURL = downloadURL;  // Používáme přesnou URL z version.json
+  String firmwareURL = downloadURL;  // Use exact URL from version.json
   Serial.println("[OTA] Downloading from: " + firmwareURL);
   Serial.println("[OTA] Installing version: " + availableVersion);
   
   HTTPClient http;
   
-  // OPRAVA: Povolit sledování přesměrování (GitHub vrací 302 pro download linky)
+  // FIX: Allow redirect following (GitHub returns 302 for download links)
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   
   http.begin(firmwareURL);
   http.setTimeout(30000);  // 30s timeout
   int httpCode = http.GET();
   
-  // Pokud dojde k přesměrování, httpCode bude nyní 200 (z finální URL)
+  // If redirected, httpCode will be 200 (from final URL)
   if (httpCode == 200) {
     int contentLength = http.getSize();
     bool canBegin = Update.begin(contentLength);
@@ -3078,7 +3078,7 @@ void performOTAUpdate() {
       uint8_t buff[128];
       int lastProgress = -1;
       
-      // ========== FÁZE 1: DOWNLOADING ==========
+      // ========== PHASE 1: DOWNLOADING ==========
       while (http.connected() && (written < contentLength)) {
         size_t available = client->available();
         if (available) {
@@ -3087,14 +3087,14 @@ void performOTAUpdate() {
           
           updateProgress = (written * 100) / contentLength;
           
-          // Aktualizace pouze pokud se progress změnil
+          // Update only if progress changed
           if (updateProgress != lastProgress) {
             lastProgress = updateProgress;
             
-            // Vymazání předchozího textu
+            // Clear previous text
             tft.fillRect(0, 60, 320, 130, TFT_BLACK);
             
-            // Text "Downloading"
+            // "Downloading" text
             tft.setTextColor(TFT_CYAN);
             tft.drawString("Downloading...", 160, 70, 2);
             
@@ -3102,11 +3102,11 @@ void performOTAUpdate() {
             tft.drawRoundRect(40, 100, 240, 25, 4, TFT_DARKGREY);
             tft.fillRoundRect(42, 102, (updateProgress * 236) / 100, 21, 3, TFT_CYAN);
             
-            // Procenta
+            // Percentage
             tft.setTextColor(TFT_WHITE);
             tft.drawString(String(updateProgress) + "%", 160, 112, 2);
             
-            // Velikost stažených dat
+            // Downloaded size
             tft.setTextColor(TFT_LIGHTGREY);
             String sizeStr = String(written / 1024) + " / " + String(contentLength / 1024) + " KB";
             tft.drawString(sizeStr, 160, 140, 1);
@@ -3121,12 +3121,12 @@ void performOTAUpdate() {
         delay(1);
       }
       
-      // ========== FÁZE 2: INSTALLING ==========
+      // ========== PHASE 2: INSTALLING ==========
       tft.fillRect(0, 60, 320, 130, TFT_BLACK);
       tft.setTextColor(TFT_ORANGE);
       tft.drawString("Installing...", 160, 70, 2);
       
-      // Progress bar - installing (animace)
+      // Progress bar - installing (animation)
       for (int i = 0; i <= 100; i += 5) {
         tft.drawRoundRect(40, 100, 240, 25, 4, TFT_DARKGREY);
         tft.fillRoundRect(42, 102, (i * 236) / 100, 21, 3, TFT_ORANGE);
@@ -3150,7 +3150,7 @@ void performOTAUpdate() {
         ESP.restart();
         
       } else {
-        // ========== SELHÁNÍ - ROLLBACK ==========
+        // ========== FAILURE - ROLLBACK ==========
         updateStatus = "Update failed!";
         Serial.println("[OTA] ✗ Update failed!");
         Serial.println(Update.errorString());
@@ -3163,7 +3163,7 @@ void performOTAUpdate() {
         tft.drawString("Rolling back to", 160, 110, 1);
         tft.drawString("previous version...", 160, 125, 1);
         
-        // Odpočítávání 10 sekund
+        // 10-second countdown
         for (int i = 10; i > 0; i--) {
           tft.fillRect(140, 150, 40, 20, TFT_BLACK);
           tft.setTextColor(TFT_WHITE);
@@ -3171,7 +3171,7 @@ void performOTAUpdate() {
           delay(1000);
         }
         
-        // Návrat do Firmware menu
+        // Return to Firmware menu
         isUpdating = false;
         currentState = FIRMWARE_SETTINGS;
         drawFirmwareScreen();
@@ -3179,7 +3179,7 @@ void performOTAUpdate() {
       }
       
     } else {
-      // ========== NEDOSTATEK MÍSTA ==========
+      // ========== NOT ENOUGH SPACE ==========
       updateStatus = "Not enough space!";
       Serial.println("[OTA] ✗ Not enough space!");
       
@@ -3204,7 +3204,7 @@ void performOTAUpdate() {
     }
     
   } else {
-    // ========== CHYBA STAHOVÁNÍ ==========
+    // ========== DOWNLOAD ERROR ==========
     updateStatus = "Download failed!";
     Serial.print("[OTA] ✗ HTTP error: ");
     Serial.println(httpCode);
@@ -3240,32 +3240,32 @@ void setup() {
   Serial.println("\n\n[SETUP] === CYD Starting ===");
   Serial.println("[SETUP] Version: 7.8 (Fixes Applied)");
   
-  // ===== PREFERENCES INITIALIZATION (Načítání nastavení) =====
-  // Musíme načíst preference PŘED inicializací TFT, abychom znali barvu pozadí
+  // ===== PREFERENCES INITIALIZATION (loading settings) =====
+  // We must load preferences BEFORE initializing TFT to know background color
   prefs.begin("sys", false);
   ssid = prefs.getString("ssid", "");
   password = prefs.getString("pass", "");
   isDigitalClock = prefs.getBool("digiClock", false);
   is12hFormat = prefs.getBool("12hFmt", false);
   
-  // OPRAVA: Načtení uloženého tématu
+  // FIX: Load saved theme
   themeMode = prefs.getInt("themeMode", 0);
   isWhiteTheme = prefs.getBool("theme", false);
   invertColors = prefs.getBool("invertColors", false);
 
-  // Načtení OTA nastavení
+  // Load OTA settings
 otaInstallMode = prefs.getInt("otaMode", 1);  // Default: By user
 Serial.print("[OTA] Install mode: ");
 Serial.println(otaInstallMode);
   
-   // OPRAVA: Načtení nastavení jasu a Auto Dim
-  brightness = prefs.getInt("bright", 255); // Načteme i uložený jas
+  // FIX: Load brightness and Auto Dim settings
+  brightness = prefs.getInt("bright", 255); // Also load saved brightness
   autoDimEnabled = prefs.getBool("autoDimEnabled", false);
   autoDimStart = prefs.getInt("autoDimStart", 22);
   autoDimEnd = prefs.getInt("autoDimEnd", 6);
   autoDimLevel = prefs.getInt("autoDimLevel", 20);
   
-  // OPRAVA: Načtení nastavení jednotek teploty (°C / °F)
+  // FIX: Load temperature unit settings (C / F)
   weatherUnitF = prefs.getBool("weatherUnitF", false);
   weatherUnitMph = prefs.getBool("weatherUnitMph", false);
   Serial.print("[SETUP] Weather unit loaded: ");
@@ -3273,7 +3273,7 @@ Serial.println(otaInstallMode);
   
   prefs.end();
   
-  // Debug výpis s invertColors
+  // Debug output with invertColors
   Serial.print("[SETUP] Preferences loaded - Theme: ");
   Serial.print(themeMode);
   Serial.print(", AutoDim: ");
@@ -3285,14 +3285,14 @@ Serial.println(otaInstallMode);
   tft.init();
   tft.setRotation(1);
   
-  // DŮLEŽITÉ: CYD má hardwarově invertovaný displej, takže logika je opačná:
-  // invertColors=false (normální) → tft.invertDisplay(true) - kompenzuje hardware
-  // invertColors=true (invertováno) → tft.invertDisplay(false) - nechat hardware
+  // IMPORTANT: CYD has hardware-inverted display, so the logic is reversed:
+  // invertColors=false (normal) -> tft.invertDisplay(true) - compensates hardware
+  // invertColors=true (inverted) -> tft.invertDisplay(false) - leave hardware
   delay(50);
-  tft.invertDisplay(!invertColors);  // OPAČNÁ LOGIKA kvůli hardwarové inverzi
+  tft.invertDisplay(!invertColors);  // REVERSED LOGIC due to hardware inversion
   delay(50);
   
-  tft.fillScreen(getBgColor()); // Nejprve vyplníme obrazovku
+  tft.fillScreen(getBgColor()); // Fill screen first
   
   pinMode(LCD_BL_PIN, OUTPUT);
   analogWrite(LCD_BL_PIN, brightness);
@@ -3349,7 +3349,7 @@ Serial.println(otaInstallMode);
       }
       
       currentState = CLOCK;
-      lastSec = -1;  // Vynutí kompletní překreslení v loop()
+      lastSec = -1;  // Force full redraw in loop()
       
       handleNamedayUpdate();
     } else {
@@ -3370,21 +3370,21 @@ Serial.println(otaInstallMode);
 }
 
 String getNamedayForDate(int day, int month) {
-  // Hardcoded ceske svatky bez diakritiky - pouze pro Czech Republic
+  // Hardcoded Czech namedays without diacritics - only for Czech Republic
   static const char* namedays[13][32] = {
-    {}, // mesic 0 (neexistuje)
-    {"--","Novy rok","Karina","Radmila","Diana","Dalimil","Tri krále","Vilma","Ctirad","Adrian","Brezislav","Bohdana","Pravoslav","Edita","Radovan","Alice","Ctirad","Drahoslav","Vladislav","Doubravka","Ilona","Elian","Slavomir","Zdenek","Milena","Milos","Zora","Ingrid","Otyla","Zdislava","Robin","Marika"}, // Leden
-    {"--","Hynek","Nela","Blazej","Jarmila","Dobromila","Vanda","Veronika","Milada","Apolena","Mojmir","Bozena","Slavena","Vendelin","Valentin","Jiri","Ljuba","Miloslav","Gizela","Patrik","Oldrich","Lenka","Petr","Svatopluk","Matej","Liliana","Dorotea","Alexandr","Lumír","Horymír","--","--"}, // Unor
-    {"--","Bedrich","Anezka","Kamil","Stela","Kazimir","Miroslav","Tomas","Gabriela","Franciska","Viktorie","Andelka","Rehore","Ruzena","Matylda","Kristyna","Lubomir","Vlastimil","Eduard","Josef","Svetlana","Radek","Leona","Ivona","Gabriel","Marian","Emanuel","Dita","Sonar","Taťana","Arnošt","Kveta"}, // Brezen
-    {"--","Hugo","Erika","Richard","Ivana","Miroslava","Vendula","Herman","Ema","Dusan","Darja","Izabela","Julius","Ales","Vincenc","Anastázie","Irena","Rudolf","Valerie","Rostislav","Marcela","Alexandr","Evženie","Vojtech","Jiri","Marek","Oto","Jaroslav","Vlastislav","Robert","Blahoslav","--"}, // Duben
-    {"--","Svátek práce","Zikmund","Alexej","Květoslav","Klaudie","Radoslav","Stanislav","Den vítězství","Ctibor","Blažena","Svatava","Pankrac","Servác","Bonifác","Žofie","Přemysl","Aneta","Nataša","Ivo","Zbyšek","Monika","Emil","Vladimír","Jana","Viola","Filip","Valdemar","Vilém","Maxim","Ferdinand","Kamila"}, // Kveten
-    {"--","Laura","Jarmil","Tamara","Dalibor","Dobroslav","Norbert","Iveta","Medard","Stanislava","Gita","Bruno","Antonie","Antonín","Roland","Vít","Zbyněk","Adolf","Milan","Leoš","Květa","Alois","Pavla","Zdeňka","Jan","Ivan","Adriana","Ladislav","Lubomír","Petr a Pavel","Šárka","--"}, // Cerven
-    {"--","Jaroslava","Patricie","Radomír","Prokop","Cyril a Metoděj","Jan Hus","Bohuslava","Nora","Drahoslava","Libuše a Amálie","Olga","Bořek","Markéta","Karolína","Jindřich","Luboš","Martina","Drahomíra","Čeněk","Ilja","Vítězslav","Magdaléna","Libor","Kristýna","Jakub","Anna","Věroslav","Viktor","Marta","Bořivoj","Ignác"}, // Cervenec
-    {"--","Oskar","Gustav","Miluše","Dominik","Kristián","Oldřiška","Lada","Soběslav","Roman","Vavřinec","Zuzana","Klára","Alena","Alan","Hana","Jáchym","Petra","Helena","Ludvík","Bernard","Johana","Bohuslav","Sandra","Bartoloměj","Radim","Luděk","Otakar","Augustýn","Evelína","Vladěna","Pavlína"}, // Srpen
-    {"--","Linda","Adéla","Bronislav","Jindřiška","Boris","Boleslav","Regína","Mariana","Daniela","Irma","Denisa","Marie","Lubor","Radka","Jolana","Ludmila","Naděžda","Kryštof","Zita","Oleg","Matouš","Darina","Berta","Jaromír","Zlata","Andrea","Jonáš","Václav","Michal","Jeroným","--"}, // Zari
-    {"--","Igor","Olivie","Bohumil","František","Eliška","Hanuš","Justýna","Věra","Štefan","Marina","Andrej","Marcel","Renáta","Agáta","Tereza","Havel","Hedvika","Lukáš","Michaela","Vendelín","Brigita","Sabina","Teodor","Nina","Beáta","Erik","Šarlota","Státní svátek","Silvie","Tadeáš","Štěpánka"}, // Rijen
-    {"--","Felix","Památka zesnulých","Hubert","Karel","Miriam","Liběna","Saskie","Bohumír","Bohdan","Evžen","Martin","Benedikt","Tibor","Sáva","Leopold","Otmar","Den boje za svobodu","Romana","Alžběta","Nikola","Albert","Cecílie","Klement","Emílie","Kateřina","Artur","Xenie","René","Zina","Ondřej","--"}, // Listopad
-    {"--","Iva","Blanka","Svatoslav","Barbora","Jitka","Mikuláš","Ambrož","Květoslava","Vratislav","Julie","Dana","Simona","Lucie","Lýdie","Radana","Albína","Daniel","Miloslav","Ester","Dagmar","Natálie","Šimon","Vlasta","Štědrý den","1. svátek vánoční","2. svátek vánoční","Žaneta","Bohumila","Judita","David","Silvestr"} // Prosinec
+    {}, // month 0 (does not exist)
+    {"--","Novy rok","Karina","Radmila","Diana","Dalimil","Tri krále","Vilma","Ctirad","Adrian","Brezislav","Bohdana","Pravoslav","Edita","Radovan","Alice","Ctirad","Drahoslav","Vladislav","Doubravka","Ilona","Elian","Slavomir","Zdenek","Milena","Milos","Zora","Ingrid","Otyla","Zdislava","Robin","Marika"}, // January
+    {"--","Hynek","Nela","Blazej","Jarmila","Dobromila","Vanda","Veronika","Milada","Apolena","Mojmir","Bozena","Slavena","Vendelin","Valentin","Jiri","Ljuba","Miloslav","Gizela","Patrik","Oldrich","Lenka","Petr","Svatopluk","Matej","Liliana","Dorotea","Alexandr","Lumír","Horymír","--","--"}, // February
+    {"--","Bedrich","Anezka","Kamil","Stela","Kazimir","Miroslav","Tomas","Gabriela","Franciska","Viktorie","Andelka","Rehore","Ruzena","Matylda","Kristyna","Lubomir","Vlastimil","Eduard","Josef","Svetlana","Radek","Leona","Ivona","Gabriel","Marian","Emanuel","Dita","Sonar","Taťana","Arnošt","Kveta"}, // March
+    {"--","Hugo","Erika","Richard","Ivana","Miroslava","Vendula","Herman","Ema","Dusan","Darja","Izabela","Julius","Ales","Vincenc","Anastázie","Irena","Rudolf","Valerie","Rostislav","Marcela","Alexandr","Evženie","Vojtech","Jiri","Marek","Oto","Jaroslav","Vlastislav","Robert","Blahoslav","--"}, // April
+    {"--","Svátek práce","Zikmund","Alexej","Květoslav","Klaudie","Radoslav","Stanislav","Den vítězství","Ctibor","Blažena","Svatava","Pankrac","Servác","Bonifác","Žofie","Přemysl","Aneta","Nataša","Ivo","Zbyšek","Monika","Emil","Vladimír","Jana","Viola","Filip","Valdemar","Vilém","Maxim","Ferdinand","Kamila"}, // May
+    {"--","Laura","Jarmil","Tamara","Dalibor","Dobroslav","Norbert","Iveta","Medard","Stanislava","Gita","Bruno","Antonie","Antonín","Roland","Vít","Zbyněk","Adolf","Milan","Leoš","Květa","Alois","Pavla","Zdeňka","Jan","Ivan","Adriana","Ladislav","Lubomír","Petr a Pavel","Šárka","--"}, // June
+    {"--","Jaroslava","Patricie","Radomír","Prokop","Cyril a Metoděj","Jan Hus","Bohuslava","Nora","Drahoslava","Libuše a Amálie","Olga","Bořek","Markéta","Karolína","Jindřich","Luboš","Martina","Drahomíra","Čeněk","Ilja","Vítězslav","Magdaléna","Libor","Kristýna","Jakub","Anna","Věroslav","Viktor","Marta","Bořivoj","Ignác"}, // July
+    {"--","Oskar","Gustav","Miluše","Dominik","Kristián","Oldřiška","Lada","Soběslav","Roman","Vavřinec","Zuzana","Klára","Alena","Alan","Hana","Jáchym","Petra","Helena","Ludvík","Bernard","Johana","Bohuslav","Sandra","Bartoloměj","Radim","Luděk","Otakar","Augustýn","Evelína","Vladěna","Pavlína"}, // August
+    {"--","Linda","Adéla","Bronislav","Jindřiška","Boris","Boleslav","Regína","Mariana","Daniela","Irma","Denisa","Marie","Lubor","Radka","Jolana","Ludmila","Naděžda","Kryštof","Zita","Oleg","Matouš","Darina","Berta","Jaromír","Zlata","Andrea","Jonáš","Václav","Michal","Jeroným","--"}, // September
+    {"--","Igor","Olivie","Bohumil","František","Eliška","Hanuš","Justýna","Věra","Štefan","Marina","Andrej","Marcel","Renáta","Agáta","Tereza","Havel","Hedvika","Lukáš","Michaela","Vendelín","Brigita","Sabina","Teodor","Nina","Beáta","Erik","Šarlota","Státní svátek","Silvie","Tadeáš","Štěpánka"}, // October
+    {"--","Felix","Památka zesnulých","Hubert","Karel","Miriam","Liběna","Saskie","Bohumír","Bohdan","Evžen","Martin","Benedikt","Tibor","Sáva","Leopold","Otmar","Den boje za svobodu","Romana","Alžběta","Nikola","Albert","Cecílie","Klement","Emílie","Kateřina","Artur","Xenie","René","Zina","Ondřej","--"}, // November
+    {"--","Iva","Blanka","Svatoslav","Barbora","Jitka","Mikuláš","Ambrož","Květoslava","Vratislav","Julie","Dana","Simona","Lucie","Lýdie","Radana","Albína","Daniel","Miloslav","Ester","Dagmar","Natálie","Šimon","Vlasta","Štědrý den","1. svátek vánoční","2. svátek vánoční","Žaneta","Bohumila","Judita","David","Silvestr"} // December
   };
   
   if (month < 1 || month > 12 || day < 1 || day > 31) return "--";
@@ -3392,7 +3392,7 @@ String getNamedayForDate(int day, int month) {
 }
 
 void handleNamedayUpdate() {
-  // Pouze pro Czech Republic - hardcoded svatky
+  // Only for Czech Republic - hardcoded namedays
   if (selectedCountry != "Czech Republic") {
     namedayValid = false;
     todayNameday = "--";
@@ -3418,7 +3418,7 @@ void handleNamedayUpdate() {
   int month = timeinfo->tm_mon + 1;
   int hour = timeinfo->tm_hour;
 
-  // Aktualizace svatku pri zmene dne
+  // Update nameday when day changes
   if (today != lastNamedayDay) {
     lastNamedayDay = today;
     lastNamedayHour = hour;
@@ -3439,7 +3439,7 @@ void handleNamedayUpdate() {
       Serial.println("[NAMEDAY] No nameday for this date");
     }
   } else if (hour == 0 && lastNamedayHour != 0) {
-    // Pulnocni kontrola
+    // Midnight check
     lastNamedayHour = hour;
     
     time_t now2 = time(nullptr);
@@ -3462,7 +3462,7 @@ void handleNamedayUpdate() {
 
 void handleKeyboardTouch(int x, int y) {
   Serial.println("[KEYBOARD] Touch detected at X=" + String(x) + ", Y=" + String(y));
-  // ========== DETEKCE PÍSMEN A ČÍSEL V ŘÁDCÍCH KLÁVESNICE ==========
+  // ========== DETECT LETTERS AND DIGITS IN KEYBOARD ROWS ==========
   for (int r = 0; r < 3; r++) {
     const char *row;
     if (keyboardNumbers) {
@@ -3488,7 +3488,7 @@ void handleKeyboardTouch(int x, int y) {
       int btnX = i * 29 + 2;
       int btnY = 80 + r * 30;
       
-      // Upravena detekce dotyku na 26x26 (design WiFi klávesnice)
+      // Adjusted touch detection to 26x26 (WiFi keyboard design)
       if (x >= btnX && x <= btnX + 26 && y >= btnY && y <= btnY + 26) {
         char ch = row[i];
         if (keyboardShift && !keyboardNumbers) {
@@ -3502,11 +3502,11 @@ void handleKeyboardTouch(int x, int y) {
         } else if (currentState == CUSTOMCITYINPUT) {
           customCityInput += ch;
           Serial.println("[KEYBOARD] Added to customCityInput: " + String(ch));
-          drawCustomCityInput(); // Celkové překreslení pro udržení vizuálu
+          drawCustomCityInput(); // Full redraw to keep visuals
         } else if (currentState == CUSTOMCOUNTRYINPUT) {
           customCountryInput += ch;
           Serial.println("[KEYBOARD] Added to customCountryInput: " + String(ch));
-          drawCustomCountryInput(); // Celkové překreslení pro udržení vizuálu
+          drawCustomCountryInput(); // Full redraw to keep visuals
         }
         
         delay(150);
@@ -3515,7 +3515,7 @@ void handleKeyboardTouch(int x, int y) {
     }
   }
   
-  // ========== DETEKCE MEZERNÍKU (SPACE) ==========
+  // ========== DETECT SPACEBAR ==========
   if (x >= 2 && x <= 318 && y >= 170 && y <= 195) {
     Serial.println("[KEYBOARD] Space pressed");
     if (currentState == KEYBOARD) {
@@ -3533,12 +3533,12 @@ void handleKeyboardTouch(int x, int y) {
     return;
   }
   
-  // ========== DETEKCE FUNKČNÍCH TLAČÍTEK ==========
+  // ========== DETECT FUNCTION BUTTONS ==========
   int bw = 64;
   int by = 198;
   int bh = 35;
   
-  // ===== TLAČÍTKO 1: SHIFT (CAP) =====
+  // ===== BUTTON 1: SHIFT (CAP) =====
   if (x >= 0 && x <= bw && y >= by && y <= by + bh) {
     Serial.println("[KEYBOARD] SHIFT pressed");
     keyboardShift = !keyboardShift;
@@ -3555,7 +3555,7 @@ void handleKeyboardTouch(int x, int y) {
     return;
   }
   
-  // ===== TLAČÍTKO 2: ČÍSLA (123) =====
+  // ===== BUTTON 2: NUMBERS (123) =====
   if (x >= bw && x <= 2 * bw && y >= by && y <= by + bh) {
     Serial.println("[KEYBOARD] NUMBERS toggle pressed");
     keyboardNumbers = !keyboardNumbers;
@@ -3572,7 +3572,7 @@ void handleKeyboardTouch(int x, int y) {
     return;
   }
   
-  // ===== TLAČÍTKO 3: SMAZÁNÍ (DEL) =====
+  // ===== BUTTON 3: DELETE (DEL) =====
   if (x >= 2 * bw && x <= 3 * bw && y >= by && y <= by + bh) {
     Serial.println("[KEYBOARD] DEL pressed");
     if (currentState == KEYBOARD) {
@@ -3596,25 +3596,25 @@ void handleKeyboardTouch(int x, int y) {
     return;
   }
   
-  // ===== TLAČÍTKO 4: LOOKUP / SEARCH / OK (WiFi) =====
+  // ===== BUTTON 4: LOOKUP / SEARCH / OK (WiFi) =====
   if (x >= 3 * bw && x <= 4 * bw && y >= by && y <= by + bh) {
-    // 1) WiFi - Tlačítko BACK (v designu WiFi je Back na pozici 3, zde je to pozice 4 v gridu?)
-    // Pozor: V drawKeyboardScreen je: 3*bw = Back(Red), 4*bw = OK(Green).
-    // V drawCustomCityInput je: 3*bw = Lookup(Green), 4*bw = Back(Orange).
+    // 1) WiFi - BACK button (in WiFi design Back is at position 3; here it is position 4 in grid?)
+    // Note: In drawKeyboardScreen: 3*bw = Back (Red), 4*bw = OK (Green).
+    // In drawCustomCityInput: 3*bw = Lookup (Green), 4*bw = Back (Orange).
     
-    // Zde musíme rozlišit podle currentState, co je na které souřadnici
+    // We must distinguish by currentState which action is at each coordinate
     
     if (currentState == KEYBOARD) {
-       // Pro WiFi je na pozici 3*bw tlačítko BACK
+      // For WiFi, position 3*bw is the BACK button
        Serial.println("[KEYBOARD] WIFI BACK pressed");
-       passwordBuffer = ""; // VYMAZÁNÍ TEXTU PŘI OPUŠTĚNÍ
+      passwordBuffer = ""; // CLEAR TEXT ON EXIT
        keyboardShift = false;
        keyboardNumbers = false;
        currentState = WIFICONFIG;
        drawInitialSetup();
        
     } else if (currentState == CUSTOMCITYINPUT) {
-      // Pro City Input je na pozici 3*bw tlačítko LOOKUP (Green)
+      // For City Input, position 3*bw is LOOKUP (Green)
       Serial.println("[KEYBOARD] LOOKUP pressed for city");
       if (customCityInput.length() > 0) {
         Serial.println("[KEYBOARD] Looking up city: " + customCityInput);
@@ -3627,7 +3627,7 @@ void handleKeyboardTouch(int x, int y) {
         drawCustomCityInput();
       }
     } else if (currentState == CUSTOMCOUNTRYINPUT) {
-      // Pro Country Input je na pozici 3*bw tlačítko SEARCH (Green)
+      // For Country Input, position 3*bw is SEARCH (Green)
       Serial.println("[KEYBOARD] SEARCH pressed for country");
       if (customCountryInput.length() > 0) {
         Serial.println("[KEYBOARD] Looking up country: " + customCountryInput);
@@ -3645,11 +3645,11 @@ void handleKeyboardTouch(int x, int y) {
     return;
   }
   
-  // ===== TLAČÍTKO 5: ZPĚT (Custom) / OK (WiFi) =====
+  // ===== BUTTON 5: BACK (Custom) / OK (WiFi) =====
   if (x >= 4 * bw && x <= 5 * bw && y >= by && y <= by + bh) {
     
     if (currentState == KEYBOARD) {
-      // Pro WiFi je na pozici 4*bw tlačítko OK (Green)
+      // For WiFi, position 4*bw is OK (Green)
       Serial.println("[KEYBOARD] WIFI OK pressed");
       prefs.begin("sys", false);
       prefs.putString("ssid", selectedSSID);
@@ -3682,9 +3682,9 @@ void handleKeyboardTouch(int x, int y) {
       }
 
     } else if (currentState == CUSTOMCITYINPUT) {
-      // Pro City Input je na pozici 4*bw tlačítko BACK
+      // For City Input, position 4*bw is BACK
       Serial.println("[KEYBOARD] Returning from custom city input");
-      customCityInput = ""; // VYMAZÁNÍ TEXTU PŘI OPUŠTĚNÍ
+      customCityInput = ""; // CLEAR TEXT ON EXIT
       keyboardShift = false;
       keyboardNumbers = false;
       currentState = CITYSELECT;
@@ -3692,9 +3692,9 @@ void handleKeyboardTouch(int x, int y) {
       drawCitySelection();
       
     } else if (currentState == CUSTOMCOUNTRYINPUT) {
-      // Pro Country Input je na pozici 4*bw tlačítko BACK
+      // For Country Input, position 4*bw is BACK
       Serial.println("[KEYBOARD] Returning from custom country input");
-      customCountryInput = ""; // VYMAZÁNÍ TEXTU PŘI OPUŠTĚNÍ
+      customCountryInput = ""; // CLEAR TEXT ON EXIT
       keyboardShift = false;
       keyboardNumbers = false;
       currentState = COUNTRYSELECT;
@@ -3706,7 +3706,7 @@ void handleKeyboardTouch(int x, int y) {
     return;
   }
   
-  // ===== SHOW/HIDE HESLA (POUZE PRO WIFI) =====
+  // ===== SHOW/HIDE PASSWORD (WIFI ONLY) =====
   if (currentState == KEYBOARD && x >= 250 && x <= 320 && y >= 140 && y <= 165) {
     Serial.println("[KEYBOARD] SHOW/HIDE password toggled");
     showPassword = !showPassword;
@@ -3752,20 +3752,20 @@ void loop() {
 
     switch (currentState) {
       case CLOCK: {
-        // Tlačítko nastavení (Settings)
+        // Settings button
         if (x >= 270 && x <= 320 && y >= 200 && y <= 240) {
           currentState = SETTINGS;
           menuOffset = 0;
           drawSettingsScreen();
         }
         
-        // PŘIDÁNO: Dotyk na hodiny pro změnu formátu 12/24h (JEN V DIGITÁLNÍM REŽIMU)
-        // Oblast hodin cca x: 180-280, y: 40-130 (dle clockX, clockY a radius)
+        // ADDED: Tap clock to toggle 12/24h format (DIGITAL MODE ONLY)
+        // Clock area approx x: 180-280, y: 40-130 (per clockX, clockY, radius)
         // clockX = 230, clockY = 85, radius = 67
         if (isDigitalClock && x >= 160 && x <= 300 && y >= 20 && y <= 150) {
            is12hFormat = !is12hFormat;
            prefs.begin("sys", false); prefs.putBool("12hFmt", is12hFormat); prefs.end();
-           // Vynutit překreslení vymazáním lastSec
+           // Force redraw by resetting lastSec
            lastSec = -1;
            delay(200); 
         }
@@ -3773,29 +3773,29 @@ void loop() {
       }
 
       case SETTINGS: {
-        // Tlačítko ZPĚT (červené)
+        // Back button (red)
         if (x >= 230 && x <= 280 && y >= 125 && y <= 175) {
           currentState = CLOCK;
           lastSec = -1;
           delay(150);
         } 
-        // Šipka nahoru
+        // Up arrow
         else if (menuOffset > 0 && x >= 230 && x <= 280 && y >= 70 && y <= 120) {
           menuOffset--;
           drawSettingsScreen();
           delay(150);
         }
-        // Šipka dolů
+        // Down arrow
         else if (menuOffset < 1 && x >= 230 && x <= 280 && y >= 180 && y <= 230) {
           menuOffset++;
           drawSettingsScreen();
           delay(150);
         }
-        // Detekce kliknutí na položky menu
+        // Detect menu item taps
         else {
-          for (int i = 0; i < 4; i++) {  // 4 viditelné položky na obrazovce
+          for (int i = 0; i < 4; i++) {  // 4 visible items on screen
             if (isTouchInMenuItem(y, i)) {
-              int actualItem = i + menuOffset;  // Přepočet: vizuální pozice → skutečná položka
+              int actualItem = i + menuOffset;  // Remap: visual position -> actual item
               
               switch(actualItem) {
                 case 0: // WiFi Setup
@@ -3827,7 +3827,7 @@ void loop() {
               }
               
               delay(150);
-              break;  // Vyskočit z for cyklu
+              break;  // Exit loop
             }
           }
         }
@@ -3963,7 +3963,7 @@ void loop() {
       }
 
          case WEATHERCONFIG: {
-        // Tlačítko °C (levá strana)
+        // C button (left side)
         if (x >= 15 && x <= 55 && y >= 150 && y <= 175) {
           if (weatherUnitF) {
             weatherUnitF = false;
@@ -3976,7 +3976,7 @@ void loop() {
           break;
         }
         
-        // Tlačítko °F (levá strana)
+        // F button (left side)
         if (x >= 75 && x <= 115 && y >= 150 && y <= 175) {
           if (!weatherUnitF) {
             weatherUnitF = true;
@@ -3989,7 +3989,7 @@ void loop() {
           break;
         }
         
-        // Tlačítko km/h (pravá strana)
+        // km/h button (right side)
         if (x >= 175 && x <= 225 && y >= 150 && y <= 175) {
           if (weatherUnitMph) {
             weatherUnitMph = false;
@@ -4002,7 +4002,7 @@ void loop() {
           break;
         }
         
-        // Tlačítko mph (pravá strana)
+        // mph button (right side)
         if (x >= 235 && x <= 285 && y >= 150 && y <= 175) {
           if (!weatherUnitMph) {
             weatherUnitMph = true;
@@ -4015,7 +4015,7 @@ void loop() {
           break;
         }
         
-        // Tlačítko BACK
+        // BACK button
         if (x >= 40 && x <= 280 && y >= 220 && y <= 235) {
           currentState = SETTINGS;
           menuOffset = 0; 
@@ -4128,7 +4128,7 @@ void loop() {
           return;
         }
         
-        // OPRAVA: Výběr správné sady znaků podle keyboardNumbers
+        // FIX: Select correct character set based on keyboardNumbers
         const char *rows[3];
         if (keyboardNumbers) {
             rows[0] = "1234567890";
@@ -4172,7 +4172,7 @@ void loop() {
           return;
         }
         
-        // OPRAVA: Výběr správné sady znaků podle keyboardNumbers
+        // FIX: Select correct character set based on keyboardNumbers
         const char *rows[3];
         if (keyboardNumbers) {
             rows[0] = "1234567890";
@@ -4231,7 +4231,7 @@ void loop() {
         break;
       }
 case FIRMWARE_SETTINGS: {
-        // Tlačítko ZPĚT (sjednocená pozice jako ostatní menu)
+  // Back button (aligned with other menus)
         if (x >= 230 && x <= 280 && y >= 125 && y <= 175) {
           currentState = SETTINGS;
           menuOffset = 0;
@@ -4240,15 +4240,15 @@ case FIRMWARE_SETTINGS: {
           break;
         }
         
-        // Radio buttons pro režim (jen Auto a By user)
-        // V drawFirmwareScreen:
-        // yPos = 60 (Current) → 85 (Available) → 120 (Install mode) → 145 (první radio button)
-        // První radio button: btnY = 145 + (0 * 25) = 145
-        // Druhý radio button: btnY = 145 + (1 * 25) = 170
+        // Radio buttons for mode (Auto and By user only)
+        // In drawFirmwareScreen:
+        // yPos = 60 (Current) -> 85 (Available) -> 120 (Install mode) -> 145 (first radio button)
+        // First radio button: btnY = 145 + (0 * 25) = 145
+        // Second radio button: btnY = 145 + (1 * 25) = 170
         for (int i = 0; i < 2; i++) {
-          int btnY = 145 + (i * 25);  // OPRAVENO: 145 místo 120!
-          // Kruh má střed na btnY, poloměr 6px
-          // Klikatelná oblast: větší pro lepší UX (±10px od středu)
+          int btnY = 145 + (i * 25);  // FIXED: 145 instead of 120
+          // Circle center at btnY, radius 6px
+          // Clickable area enlarged for better UX (+/-10px from center)
           if (x >= 10 && x <= 30 && y >= btnY - 10 && y <= btnY + 10) {
             otaInstallMode = i;
             prefs.begin("sys", false);
@@ -4262,10 +4262,10 @@ case FIRMWARE_SETTINGS: {
           }
         }
         
-        // Tlačítko CHECK NOW / INSTALL
+        // CHECK NOW / INSTALL button
         if (x >= 10 && x <= 150 && y >= 190 && y <= 220) {
           if (updateAvailable) {
-            // INSTALL - vždy provedeme update (Manual režim už neexistuje)
+            // INSTALL - always perform update (Manual mode no longer exists)
             performOTAUpdate();
           } else {
             // CHECK NOW
@@ -4286,7 +4286,7 @@ case FIRMWARE_SETTINGS: {
       }
 
       case GRAPHICSCONFIG: {
-        // ... (Kód pro Témata zůstává stejný) ...
+        // ... (Theme code stays the same) ...
         if (x >= 20 && x <= 70 && y >= 65 && y <= 95) {
           themeMode = 0;
           isWhiteTheme = false;
@@ -4310,7 +4310,7 @@ case FIRMWARE_SETTINGS: {
           fillGradientVertical(0, 0, 320, 240, yellowDark, yellowLight); drawGraphicsScreen(); delay(200); break;
         }
         
-// === NOVÉ TLAČÍTKO INVERT ===
+// === NEW INVERT BUTTON ===
         if (x >= 260 && x <= 310 && y >= 65 && y <= 95) {
           Serial.println("[INVERT] Button clicked!");
           Serial.print("[INVERT] OLD value: ");
@@ -4321,7 +4321,7 @@ case FIRMWARE_SETTINGS: {
           Serial.print("[INVERT] NEW value: ");
           Serial.println(invertColors ? "TRUE" : "FALSE");
           
-          // Uložení s PODROBNÝM logováním
+          // Save with detailed logging
           Serial.println("[INVERT] Opening preferences...");
           bool prefOpened = prefs.begin("sys", false);
           Serial.print("[INVERT] Preferences opened: ");
@@ -4333,13 +4333,13 @@ case FIRMWARE_SETTINGS: {
             Serial.print("[INVERT] Bytes written: ");
             Serial.println(written);
             
-            delay(100); // Dáme více času na zápis
+            delay(100); // Allow more time for write
             
             Serial.println("[INVERT] Closing preferences...");
             prefs.end();
             Serial.println("[INVERT] Preferences closed");
             
-            // KONTROLA: Otevřeme znovu a přečteme
+            // CHECK: Reopen and read back
             Serial.println("[INVERT] Verification: Reading back...");
             prefs.begin("sys", true); // read-only
             bool readBack = prefs.getBool("invertColors", false);
@@ -4354,11 +4354,11 @@ case FIRMWARE_SETTINGS: {
             }
           }
           
-          // OPAČNÁ LOGIKA: CYD má hardwarově invertovaný displej
-          // invertColors=false → tft.invertDisplay(true) = normální zobrazení
-          // invertColors=true → tft.invertDisplay(false) = invertované zobrazení
+          // REVERSED LOGIC: CYD has hardware-inverted display
+          // invertColors=false -> tft.invertDisplay(true) = normal display
+          // invertColors=true -> tft.invertDisplay(false) = inverted display
           Serial.println("[INVERT] Applying tft.invertDisplay...");
-          tft.invertDisplay(!invertColors);  // OPAČNÁ LOGIKA
+          tft.invertDisplay(!invertColors);  // REVERSED LOGIC
           Serial.print("[INVERT] Display SW inverted: ");
           Serial.println(!invertColors ? "TRUE" : "FALSE");
           
@@ -4367,8 +4367,8 @@ case FIRMWARE_SETTINGS: {
           break;
         }
 
-        // === NOVÉ OVLÁDÁNÍ JASU (ZMENŠENÉ) ===
-        // Slider je nyní x=10, width=130
+        // === NEW BRIGHTNESS CONTROL (SMALLER) ===
+        // Slider is now x=10, width=130
         if (x >= 10 && x <= 140 && y >= 125 && y <= 137) {
           int newBrightness = map(x - 10, 0, 130, 0, 255);
           brightness = constrain(newBrightness, 0, 255);
@@ -4376,38 +4376,38 @@ case FIRMWARE_SETTINGS: {
           analogWrite(LCD_BL_PIN, brightness); drawGraphicsScreen(); delay(100); break;
         }
 
-        // === NOVÝ PŘEPÍNAČ ANALOG / DIGITAL ===
-        // Oblast: x >= 200, y cca 115-143
+        // === NEW ANALOG / DIGITAL TOGGLE ===
+        // Area: x >= 200, y approx 115-143
         if (x >= 200 && x <= 310 && y >= 115 && y <= 145) {
           isDigitalClock = !isDigitalClock;
           prefs.begin("sys", false); prefs.putBool("digiClock", isDigitalClock); prefs.end();
           drawGraphicsScreen(); delay(200); break;
         }
 
-        // Tlačítko ZPĚT
+        // Back button
         if (x >= 252 && x <= 308 && y >= 182 && y <= 238) {
           currentState = SETTINGS;
           menuOffset = 0; drawSettingsScreen(); delay(150); break;
         }
         
-        // ... (Zbytek kódu pro AutoDim zůstává stejný) ...
+        // ... (Rest of AutoDim code stays the same) ...
         if (x >= 10 && x <= 38 && y >= 175 && y <= 191) {
-             // ... kód pro AutoDim ON ...
+             // ... code for AutoDim ON ...
              autoDimEnabled = true;
              prefs.begin("sys", false); prefs.putBool("autoDimEnabled", autoDimEnabled); prefs.end();
              drawGraphicsScreen(); delay(150); break;
         }
         if (x >= 10 && x <= 38 && y >= 195 && y <= 211) {
-             // ... kód pro AutoDim OFF ...
+             // ... code for AutoDim OFF ...
              autoDimEnabled = false;
              prefs.begin("sys", false); prefs.putBool("autoDimEnabled", autoDimEnabled); prefs.end();
              drawGraphicsScreen(); delay(150); break;
         }
-        // ... (zbytek AutoDim logiky ponech beze změny) ...
-        // PRO JISTOTU ZKOPÍRUJ CELÝ BLOK AUTODIM Z PŮVODNÍHO SOUBORU, POKUD SI NEJSI JISTÝ.
-        // Zde jen naznačuji, že zbytek case GRAPHICSCONFIG se nemění, kromě posunutí jasu a nového tlačítka.
+        // ... (leave the rest of AutoDim logic unchanged) ...
+        // To be safe, copy the whole AutoDim block from the original file if unsure.
+        // This only indicates that the rest of GRAPHICSCONFIG is unchanged except brightness shift and new button.
         
-        // POKRAČOVÁNÍ AUTODIM LOGIKY (aby byl kód kompletní pro copy-paste bloku):
+        // CONTINUATION OF AUTODIM LOGIC (for complete copy-paste block):
         if (autoDimEnabled) {
           int startX = 50;
           int startY = 178; int lineHeight = 16;
@@ -4464,9 +4464,9 @@ case FIRMWARE_SETTINGS: {
           else if (themeMode == 3) fillGradientVertical(0, 0, 320, 240, yellowDark, yellowLight);
           
           forceClockRedraw = true;
-          // --- TADY JE TA OPRAVA ---
+          // --- THIS IS THE FIX ---
           handleNamedayUpdate();
-          // Nejdříve zjistíme jméno (uloží se do lokální/statické proměnné v dané funkci)
+          // First get the name (stored in a local/static variable in that function)
           // -------------------------
 
           drawClockFace();
@@ -4479,7 +4479,7 @@ case FIRMWARE_SETTINGS: {
 
           drawWeatherSection();
           drawDateAndWeek(&ti);
-          // Tato funkce si už vezme čerstvá data
+          // This function will use fresh data
           drawSettingsIcon(TFT_SKYBLUE);
           drawWifiIndicator();
           drawUpdateIndicator();
@@ -4489,7 +4489,7 @@ case FIRMWARE_SETTINGS: {
         lastHour = ti.tm_hour; lastMin = ti.tm_min; lastSec = ti.tm_sec;
       }
       
-      // Zbytek obsluhy změny dne (tm_mday != lastDay) ponechte jak je.
+      // Leave the rest of day-change handling (tm_mday != lastDay) as is.
       if (ti.tm_mday != lastDay) {
         lastDay = ti.tm_mday;
         handleNamedayUpdate(); 
@@ -4508,24 +4508,24 @@ case FIRMWARE_SETTINGS: {
       }
     }
   }
-// OTA verze check (při startu a každých X hodin)
+// OTA version check (on start and every X hours)
   if (!isUpdating && WiFi.status() == WL_CONNECTED) {
     if (lastVersionCheck == 0 || (millis() - lastVersionCheck > VERSION_CHECK_INTERVAL)) {
       checkForUpdate();
 
-      // Debug: Zobrazíme co jsme načetli
+      // Debug: show what we loaded
       if (updateAvailable) {
         Serial.println("[OTA] Update check complete:");
         Serial.println("[OTA]   Version: " + availableVersion);
         Serial.println("[OTA]   URL: " + downloadURL);
       }
       
-      // Pokud je dostupná aktualizace, vynutíme překreslení ikon
+      // If update is available, force icon redraw
       if (updateAvailable && currentState == CLOCK) {
-        drawUpdateIndicator();  // Okamžitě zobrazíme ikonu
+        drawUpdateIndicator();  // Show icon immediately
       }
       
-      // Pokud je dostupná aktualizace a režim je AUTO
+      // If update is available and mode is AUTO
       if (updateAvailable && otaInstallMode == 0) {
         Serial.println("[OTA] Auto-update mode - starting update...");
         performOTAUpdate();
