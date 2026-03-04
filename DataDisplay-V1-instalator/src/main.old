@@ -1,0 +1,19 @@
+#include <Arduino.h>
+#include "lgfx_2432s028.hpp"
+
+LGFX tft;
+
+void setup() {
+    Serial.begin(115200);
+    tft.init();
+    tft.setRotation(1);
+    tft.fillScreen(TFT_BLACK);
+}
+
+void loop() {
+    // Example of drawing a simple shape
+    tft.fillCircle(120, 160, 50, TFT_RED);
+    delay(1000);
+    tft.fillCircle(120, 160, 50, TFT_BLACK);
+    delay(1000);
+}
